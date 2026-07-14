@@ -101,7 +101,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [ ] M0.3c6 SemanticMapManager 主类分段审计。
 - [x] M0.3c6a 构造、UpdateSemanticMap、日志与基础访问器。
 - [x] M0.3c6b 行为/轨迹预测与语义车辆。
-- [ ] M0.3c6c 语义 Lane、本地 Lane 与快速 LUT。
+- [x] M0.3c6c 语义 Lane、本地 Lane 与快速 LUT。
 - [ ] M0.3c6d Lane 距离、碰撞、可达性与最近 Lane。
 - [ ] M0.3c6e 关键车辆筛选。
 - [ ] M0.3c6f 局部/参考 Lane 生成与采样。
@@ -897,3 +897,27 @@ SemanticLaneSet 时 `.at` 抛异常。Naive 是单帧硬阈值 one-hot，没有�
 轨迹包装忽略 predictor 错误并固定成功，预测时域/步长/Lane 有效性不检查；失败仍插入
 空轨迹。预测只跟随单一最大概率模态，无法表达换道多模态占用。M1 应统一预测状态机和
 错误契约，并引入带概率的多模态轨迹、历史平滑/意图特征及可校准不确定度。
+
+## 46. M0.3c6c：SemanticLane、长本地 Lane 与 segment/local LUT
+
+- 每帧先清空 SemanticLaneSet，只把 surrounding LaneNet 中成功由采样点生成连续 Lane 的
+  LaneRaw 转为 SemanticLane，同时复制方向、父子、左右相邻、换道可用性、行为和原始长度；
+- 随后裁剪局部一致性：相邻 Lane 不在当前 SemanticLaneSet 时关闭对应换道并写 Invalid，
+  父子列表也删除集合外 ID。因此语义拓扑是周边窗口内的截断图，而非完整 LaneNet；
+- fast LUT 先匹配自车当前 Lane，再选当前、左/左左、右/右右最多五条根 Lane；每条根
+  Lane 从自车投影位置沿 child 递归到前向累计 250 m，沿 father 递归到后向 150 m；
+- 对所有前后路径做笛卡尔积并去掉重复 root，调用高质量局部 Lane 拟合。成功路径按本帧
+  递增 local ID 写入 local_lanes_、local_to_segment_lut_ 和 segment_to_local_lut_；
+- 前/后递归在累计长度达阈值或无 child/father 时终止，后向路径在输出前反转为道路前进
+  顺序。最后无论成功 Lane 数量多少都置 `has_fast_lut_=true`。
+
+已确认的后续修复/验证点：单条 Lane 拟合失败被静默丢弃，集合更新仍成功；重复 ID insert
+不覆盖，SemanticLane.length 沿用原始字段而非拟合 Lane 实长，也不检查左右/父子关系互反。
+局部窗口裁剪会把地图中存在但不在 surrounding 集合的相邻/父子关系当成不存在，影响
+换道和路由判断。fast LUT 最近 Lane 失败发生在清缓存前，上一帧 local_lanes_/LUT 和
+has_fast_lut_ 会残留。根 Lane 使用 ID>0 判断，合法 ID 0 被排除；`.at` 假设 whole 与
+semantic 集合包含全部当前/相邻 ID，缺失即抛异常。根投影错误被忽略，arc_len 可能无效。
+递归把 Lane ID 声明为 decimal_t，且无环检测、深度/分支上限或重复路径去重；零长度环可
+无限递归，分叉图的路径数和前后笛卡尔积可能指数增长。拼接失败仍最终把 LUT 标为有效，
+local ID 又不跨帧稳定。M1 应以有向无环/visited 约束的长度受限图搜索替代递归，明确窗口
+边界拓扑语义，并用稳定路径哈希、缓存增量更新和“至少一个有效 Lane”成功条件。

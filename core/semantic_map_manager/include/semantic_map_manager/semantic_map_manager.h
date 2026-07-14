@@ -293,8 +293,10 @@ class SemanticMapManager {
   }
 
  private:
+  /// 把周边 LaneRaw 转为连续 SemanticLane，并裁剪指向当前集合外部的局部拓扑引用。
   ErrorType UpdateSemanticLaneSet();
 
+  /// 围绕自车当前/相邻根 Lane 递归拼接长本地 Lane，并重建 segment/local 双向 LUT。
   ErrorType UpdateLocalLanesAndFastLut();
 
   /// 为每辆周车匹配最近 Lane、执行 Naive 行为预测并构造对应参考 Lane。
@@ -315,11 +317,13 @@ class SemanticMapManager {
                        const decimal_t &s1, const decimal_t &step,
                        vec_E<Vecf<2>> *samples, decimal_t *accum_dist) const;
 
+  /// 沿 child_id 递归枚举累计长度达到前向阈值或无子 Lane 的全部路径。
   void GetAllForwardLaneIdPathsWithMinimumLengthByRecursion(
       const decimal_t &node_id, const decimal_t &node_length,
       const decimal_t &aggre_length, const std::vector<int> &path_to_node,
       std::vector<std::vector<int>> *all_paths);
 
+  /// 沿 father_id 递归枚举达到后向阈值的路径，并在叶端反转为前向 Lane 顺序。
   void GetAllBackwardLaneIdPathsWithMinimumLengthByRecursion(
       const decimal_t &node_id, const decimal_t &node_length,
       const decimal_t &aggre_length, const std::vector<int> &path_to_node,

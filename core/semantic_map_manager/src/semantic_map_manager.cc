@@ -347,8 +347,9 @@ ErrorType SemanticMapManager::OpenloopTrajectoryPrediction() {
 }
 
 ErrorType SemanticMapManager::UpdateSemanticLaneSet() {
+  // 每帧完全清空旧语义 Lane，只从 DataRenderer 提供的 surrounding LaneNet 重建。
   semantic_lane_set_.clear();
-  // Update semantic lane set
+  // 第一阶段：复制 LaneRaw 拓扑/行为元数据并把离散中心线拟合为连续 Lane。
   {
     for (const auto &pe : surrounding_lane_net_.lane_set) {
       common::SemanticLane semantic_lane;
@@ -364,26 +365,30 @@ ErrorType SemanticMapManager::UpdateSemanticLaneSet() {
       semantic_lane.length = pe.second.length;
 
       vec_Vecf<2> samples;
+      // 复制全部原始 Lane 采样点；空/退化样本由 LaneGenerator 决定是否失败。
       for (const auto &pt : pe.second.lane_points) {
         samples.push_back(pt);
       }
       if (common::LaneGenerator::GetLaneBySamplePoints(
               samples, &semantic_lane.lane) != kSuccess) {
+        // 单条 Lane 拟合失败时静默跳过，但整个集合更新仍继续并最终返回成功。
         continue;
       }
 
+      // 使用 LaneRaw 内部 ID 作为键；重复 ID 的后续 insert 不会覆盖已有项。
       semantic_lane_set_.semantic_lanes.insert(
           std::pair<int, common::SemanticLane>(semantic_lane.id,
                                                semantic_lane));
     }
   }
-  // Check the consistency of semantic map
+  // 第二阶段：裁剪所有指向当前局部 SemanticLaneSet 外部的相邻/父子拓扑引用。
   {
     for (auto &semantic_lane : semantic_lane_set_.semantic_lanes) {
       if (semantic_lane.second.l_change_avbl) {
         auto l_it = semantic_lane_set_.semantic_lanes.find(
             semantic_lane.second.l_lane_id);
         if (l_it == semantic_lane_set_.semantic_lanes.end()) {
+          // 左相邻 Lane 不在周边集合时同时关闭可换标记并写 Invalid ID。
           semantic_lane.second.l_change_avbl = false;
           semantic_lane.second.l_lane_id = kInvalidLaneId;
         }
@@ -392,12 +397,14 @@ ErrorType SemanticMapManager::UpdateSemanticLaneSet() {
         auto r_it = semantic_lane_set_.semantic_lanes.find(
             semantic_lane.second.r_lane_id);
         if (r_it == semantic_lane_set_.semantic_lanes.end()) {
+          // 右相邻采用与左侧对称的局部一致性裁剪。
           semantic_lane.second.r_change_avbl = false;
           semantic_lane.second.r_lane_id = kInvalidLaneId;
         }
       }
       for (auto it = semantic_lane.second.father_id.begin();
            it < semantic_lane.second.father_id.end();) {
+        // 删除周边集合中不存在的所有父 Lane ID。
         auto father_it = semantic_lane_set_.semantic_lanes.find(*it);
         if (father_it == semantic_lane_set_.semantic_lanes.end()) {
           it = semantic_lane.second.father_id.erase(it);
@@ -407,6 +414,7 @@ ErrorType SemanticMapManager::UpdateSemanticLaneSet() {
       }
       for (auto it = semantic_lane.second.child_id.begin();
            it < semantic_lane.second.child_id.end();) {
+        // 删除周边集合中不存在的所有子 Lane ID。
         auto child_it = semantic_lane_set_.semantic_lanes.find(*it);
         if (child_it == semantic_lane_set_.semantic_lanes.end()) {
           it = semantic_lane.second.child_id.erase(it);
@@ -420,6 +428,7 @@ ErrorType SemanticMapManager::UpdateSemanticLaneSet() {
 }
 
 ErrorType SemanticMapManager::UpdateLocalLanesAndFastLut() {
+  // 先在当前语义 LaneSet 中匹配自车根 Lane；失败会在清缓存之前直接返回。
   common::State ego_state = ego_vehicle_.state();
   int cur_lane_id;
   decimal_t dist_tmp, arc_len_tmp;
@@ -429,29 +438,29 @@ ErrorType SemanticMapManager::UpdateLocalLanesAndFastLut() {
     return kWrongStatus;
   }
 
+  // 最近 Lane 成功后才清空上一帧本地 Lane 和双向查表。
   local_lanes_.clear();
   local_to_segment_lut_.clear();
   segment_to_local_lut_.clear();
 
-  // * currently we consider ego lane and its adjacent lanes (trunk lanes)
+  // 根 Lane 固定包含当前 Lane，并沿左、右各最多再扩展两条 trunk Lane。
   std::vector<int> root_lane_ids;
   {
     root_lane_ids.push_back(cur_lane_id);
-    // ~ left
+    // 左侧只按 Lane ID>0 判断存在，不检查 l_change_avbl。
     if (whole_lane_net_.lane_set.at(cur_lane_id).l_lane_id > 0) {
       int l_id = whole_lane_net_.lane_set.at(cur_lane_id).l_lane_id;
       root_lane_ids.push_back(l_id);
-      // ~ left -> left
+      // 再沿左相邻 Lane 向左扩展一级。
       if (whole_lane_net_.lane_set.at(l_id).l_lane_id > 0) {
         int ll_id = whole_lane_net_.lane_set.at(l_id).l_lane_id;
         root_lane_ids.push_back(ll_id);
       }
     }
-    // ~ right
+    // 右侧采用对称的最多两级扩展规则。
     if (whole_lane_net_.lane_set.at(cur_lane_id).r_lane_id > 0) {
       int r_id = whole_lane_net_.lane_set.at(cur_lane_id).r_lane_id;
       root_lane_ids.push_back(r_id);
-      // ~ right -> right
       if (whole_lane_net_.lane_set.at(r_id).r_lane_id > 0) {
         int rr_id = whole_lane_net_.lane_set.at(r_id).r_lane_id;
         root_lane_ids.push_back(rr_id);
@@ -459,8 +468,10 @@ ErrorType SemanticMapManager::UpdateLocalLanesAndFastLut() {
     }
   }
 
+  // 预留但未使用的前向展开结果容器。
   std::vector<std::vector<int>> lane_ids_expand_front;
   for (const auto root_id : root_lane_ids) {
+    // 把自车位置投影到每条根 Lane，得到根段前方剩余长度和后方已有长度。
     decimal_t arc_len;
     semantic_lane_set_.semantic_lanes.at(root_id)
         .lane.GetArcLengthByVecPosition(ego_state.vec_position, &arc_len);
@@ -469,7 +480,7 @@ ErrorType SemanticMapManager::UpdateLocalLanesAndFastLut() {
     // printf("[XXX]root: %d, arc_len: %lf, remain: %lf\n", root_id, arc_len,
     //        length_remain);
 
-    // ~ Get forward lane paths
+    // 沿 child 拓扑枚举达到 250 m 或走到叶 Lane 的全部前向路径。
     std::vector<std::vector<int>> all_paths_forward;
     GetAllForwardLaneIdPathsWithMinimumLengthByRecursion(
         root_id, length_remain, 0.0, std::vector<int>(), &all_paths_forward);
@@ -482,7 +493,7 @@ ErrorType SemanticMapManager::UpdateLocalLanesAndFastLut() {
     //   printf("\n");
     // }
 
-    // ~ Get backward lane paths
+    // 沿 father 拓扑枚举达到 150 m 或走到根 Lane 的全部后向路径。
     std::vector<std::vector<int>> all_paths_backward;
     GetAllBackwardLaneIdPathsWithMinimumLengthByRecursion(
         root_id, arc_len, 0.0, std::vector<int>(), &all_paths_backward);
@@ -494,7 +505,7 @@ ErrorType SemanticMapManager::UpdateLocalLanesAndFastLut() {
     //   printf("\n");
     // }
 
-    // ~ assemble forward and backward
+    // 对每条前向/后向路径做笛卡尔积；移除前向首个重复 root 后拼成完整 Lane ID 序列。
     std::vector<std::vector<int>> assembled_paths;
     for (const auto &f_path : all_paths_forward) {
       for (const auto &b_path : all_paths_backward) {
@@ -512,7 +523,7 @@ ErrorType SemanticMapManager::UpdateLocalLanesAndFastLut() {
     //   printf("\n");
     // }
 
-    // ~ Fit local lanes and construct LUTs
+    // 每条组合路径拟合高质量本地 Lane，并同步写 local->segments 与 segment->locals LUT。
     int local_lane_cnt = local_lanes_.size();
     for (const auto &path : assembled_paths) {
       common::Lane lane;
@@ -521,6 +532,7 @@ ErrorType SemanticMapManager::UpdateLocalLanesAndFastLut() {
                                    local_lane_length_backward_, true, &lane)) {
         continue;
       }
+      // local ID 只在本帧缓存中从当前 size 递增，不跨帧保持稳定。
       int local_id = local_lane_cnt++;
       local_lanes_.insert(std::pair<int, common::Lane>(local_id, lane));
 
@@ -549,6 +561,7 @@ ErrorType SemanticMapManager::UpdateLocalLanesAndFastLut() {
   //   printf("\n");
   // }
 
+  // 即使没有成功拟合任何本地 Lane，也把快速 LUT 标记为已构建。
   has_fast_lut_ = true;
   return kSuccess;
 }
@@ -557,8 +570,7 @@ void SemanticMapManager::GetAllForwardLaneIdPathsWithMinimumLengthByRecursion(
     const decimal_t &node_id, const decimal_t &node_length,
     const decimal_t &aggre_length, const std::vector<int> &path_to_node,
     std::vector<std::vector<int>> *all_paths) {
-  // * Traverse FORWARD
-  // check cycle here?
+  // 累加当前节点有效长度，并复制路径后追加当前 Lane ID；当前没有环检测。
 
   decimal_t node_aggre_length = node_length + aggre_length;
   auto path = path_to_node;
@@ -566,11 +578,11 @@ void SemanticMapManager::GetAllForwardLaneIdPathsWithMinimumLengthByRecursion(
 
   if (node_aggre_length >= local_lane_length_forward_ ||
       whole_lane_net_.lane_set.at(node_id).child_id.empty()) {
-    // stop recursion
+    // 达到前向目标长度或无 child 时，将当前路径作为一个终止分支输出。
     all_paths->push_back(path);
     return;
   } else {
-    // expand
+    // 对每个 child 复制路径继续递归，分叉拓扑会展开全部组合。
     auto child_ids = whole_lane_net_.lane_set.at(node_id).child_id;
     for (const auto child_id : child_ids) {
       decimal_t child_length = whole_lane_net_.lane_set.at(child_id).length;
@@ -584,8 +596,7 @@ void SemanticMapManager::GetAllBackwardLaneIdPathsWithMinimumLengthByRecursion(
     const decimal_t &node_id, const decimal_t &node_length,
     const decimal_t &aggre_length, const std::vector<int> &path_to_node,
     std::vector<std::vector<int>> *all_paths) {
-  // * Traverse BACKWARD
-  // check cycle here?
+  // 与前向递归对称地沿 father 累加长度；同样没有 visited/cycle 检查。
 
   decimal_t node_aggre_length = node_length + aggre_length;
   auto path = path_to_node;
@@ -593,13 +604,12 @@ void SemanticMapManager::GetAllBackwardLaneIdPathsWithMinimumLengthByRecursion(
 
   if (node_aggre_length >= local_lane_length_backward_ ||
       whole_lane_net_.lane_set.at(node_id).father_id.empty()) {
-    // stop recursion
-    // backward, reverse path
+    // 终止时把“root 到上游”的逆向收集顺序翻转为上游到 root 的前向顺序。
     std::reverse(path.begin(), path.end());
     all_paths->push_back(path);
     return;
   } else {
-    // expand
+    // 对每个 father 分支递归，并使用该父 Lane 的完整长度继续累计。
     auto father_ids = whole_lane_net_.lane_set.at(node_id).father_id;
     for (const auto father_id : father_ids) {
       decimal_t father_length = whole_lane_net_.lane_set.at(father_id).length;
