@@ -114,7 +114,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.4b1 SSC 地图抽象接口与 SemanticMapManager 适配器。
 - [x] M0.4b2 SSC 时空占用栅格与 corridor 地图。
 - [x] M0.4b3 SSC 轨迹规划与优化主流程。
-- [ ] M0.4b4 SSC ROS2 服务端与可视化。
+- [x] M0.4b4 SSC ROS2 服务端与可视化。
 - [ ] M0.4b5 SSC proto、配置、RViz 与构建元数据。
 - [ ] M0.4c 物理仿真器与 arena loader。
 - [ ] M0.4d playground、集成入口、launch 与构建配置。
@@ -1220,3 +1220,40 @@ Connect 返回值被忽略，候选仍保存默认 Bezier；函数即使零个�
 Init/Map/Run，严格验证候选 schema 与转换 offset，传播配置/投影/求解错误，恢复连续车身
 碰撞和完整轨迹验证；候选选择需返回真实执行行为并按安全、可行性、舒适性和参考偏差排序，
 同时加入空候选、错配容器、投影失败、QP infeasible、低速切换、浮点时间容差和降级测试。
+
+## 57. M0.4b4：SSC ROS2 服务端、轨迹双缓冲与可视化
+
+- SscPlannerServer 构造容量 100 的 ReaderWriterQueue，以及语义地图/SSC 两个可视化器；外部
+  PushSemanticMap 按值入队，后台线程每周期排空队列并只保留最新 SemanticMapManager，再
+  复制 shared snapshot 绑定 MapAdapter；默认 20 Hz，也可由构造参数指定；
+- 首次无有效 executing trajectory 时直接 RunOnce，并用地图自车状态初始化重规划/控制历史。
+  后续以 global_init_stamp 为时间网格原点，把当前时间向前量化一个周期，从 executing trajectory
+  求拼接状态并规划 next trajectory；下一周期将 next 切为 executing，同时继续预生成下一段；
+- 极低速奇异过滤以固定 2.85 m 轴距、45° 最大转角和相邻状态 dt 估算允许航向变化，超限时
+  把姿态锁到上一历史值。轨迹执行时按 work_rate 向下量化当前时刻，采样状态并编码为 ROS2
+  ControlSignal；规划失败保留旧执行轨迹并把 Marker 改黄、显示 Intervention Needed；
+- PublishData 先发布 SemanticMapManager/TF 和 SSC 诊断，再发布执行轨迹控制及 Marker。SSC
+  Visualizer 使用六个 `/vis/agent_<id>/ssc/*` topic，展示原始占用、自车 Frenet 轮廓、全部
+  自车 rollout、第一候选的周车 rollout、DrivingCorridor seed/cube 和 0.02 s 采样的 QP 曲线；
+- 时空图统一使用 `ssc_map` frame，大多数对象把绝对时间减 time_origin 映射到 z；动态 Marker
+  记录上一帧数量，由 FillHeaderIdInMarkerArray 补删除项。
+
+已确认的后续修复/验证点：Start 创建 detached thread 并捕获 this，类没有 stop/join/析构
+协议，对象提前销毁会造成 use-after-free；is_replan_on_/is_map_updated_ 等共享状态不是原子。
+work_rate 不检查正值/有限性，零值除零，负值产生非法周期，大于 1000 Hz 时整数毫秒截断为
+0 形成忙循环；system_clock 调度又可能受系统时间跳变。队列满时 try_enqueue 失败被静默
+丢弃；is_map_updated_ 首次置 true 后永不复位，即使没有新地图也持续按陈旧快照规划。Init/
+Start 顺序、node/publisher/map/planner 返回状态均不校验，map_marker_pub_ 从未使用。PublishData
+发生在本周期规划/切换前，控制和可视化天然落后一周期；当前时间早于轨迹 begin 时 floor 可
+采样到域外，重规划量化时刻也可能超过 executing end。GetState/Filter 失败多数不触发明确
+降级；duration 可负，wheel_base 局部变量未使用而公式硬编码 2.85，kBigEPS 阈值使过滤仅在
+几乎零速生效。规划失败只置 intervention 并继续旧轨迹，没有最小风险停车轨迹。
+可视化无空指针/时间区间/有限性检查，planner getter 反复深拷贝大型数据。QP/自车/前向轨迹
+为空时直接 return，不发布 DELETE，RViz 会残留上一帧 Marker。周车只画第一个候选且 unordered
+迭代导致 ID 跨帧不稳定；forward/surround 函数的 p_ssc_map 参数未使用。道路 AABB 横向固定
+3.5 m，x 中心在已含 s_back 的 origin 上再次减 s_back；cube 长度按栅格中心差计算少一个
+resolution。占用 GridMap Marker 未显式减 start_time，而 seed/corridor/QP 已减，可能在 z 轴
+错层；corridor Header 又忽略传入 stamp 使用 node 当前时间。M1 应引入可 join 的 jthread/stop
+状态机、steady/ROS clock 一致调度、输入新鲜度与丢帧统计、轨迹域 clamp 和安全降级；Marker
+应共享稳定 frame/time 变换、稳定 ID、空帧删除和真实地图几何，并补线程销毁、零频率、陈旧
+地图、轨迹边界、重规划失败、空候选及 RViz 残留测试。
