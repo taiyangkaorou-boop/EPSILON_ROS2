@@ -123,7 +123,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [ ] M0.4d playground、集成入口、launch 与构建配置。
 - [x] M0.4d1 物理仿真 GeoJSON 工具与 ROS1/ROS2 launch。
 - [x] M0.4d2 物理仿真 CMake、package.xml 与 RViz 资源。
-- [ ] M0.4d3 playground 场景资源与包元数据。
+- [x] M0.4d3 playground 场景资源与包元数据。
 - [ ] M0.4d4 planning_integrated 集成入口与剩余构建/launch 审计。
 - [ ] M0.5 全仓覆盖审计和遗漏补齐。
 
@@ -1466,3 +1466,35 @@ VehicleSet/TF/Grid 默认关闭，当前 Visualizer 又不发布 TF，ThirdPerso
 的规划显示。M1 应采用现代 target/export/install 规则、补全 manifest 和平台条件链接，安装
 RViz/tools；把综合面板拆为可参数化的 simulator 与 planning 两套配置，并增加 install-space
 find_package/link、ament lint、manifest dependency、RViz topic 存在性和多 agent namespace 检查。
+
+## 64. M0.4d3：四套 playground 场景资源与一致性审计
+
+- playgrounds 是纯 ament 资源包，安装 highway_lite、highway_v1.0、ring_small_v1.0、
+  ring_tiny_v1.0 四个目录；每套场景包含 agent_config、vehicle_set、lane_net_norm 和
+  obstacles_norm 四份 JSON；
+- agent_config 按 agent ID 保存 obstacle GridMap 宽高/分辨率、周边搜索半径、open-loop
+  prediction 和 fast Lane LUT 开关；vehicle_set 保存同 ID 车辆的类型、初始 State 和几何/
+  动力学参数；后两份是局部坐标 GeoJSON FeatureCollection；
+- highway_lite 有 11 辆车/agent、39 条 Lane、39 个有效障碍；highway_v1.0 有 11 辆车/agent、
+  107 条 Lane、62 个障碍（1 个 is_valid=false）；ring_small 有 14 辆车/agent、30 条 Lane、
+  16 个障碍（3 个无效）；ring_tiny 有 15 辆车、13 个 agent、8 条 Lane、13 个障碍（1 个无效）；
+- 本次结构化审计确认四场景 vehicle/agent/Lane/obstacle ID 自身均无重复，Lane 均非空，所有
+  child/father/left/right 非零引用都指向现有 Lane；车辆/agent 核心数值均为有限数，地图尺寸、
+  分辨率、搜索半径及车宽/长/轴距均为正，静态障碍 ID 均小于临时障碍偏移 10000；
+- Lane metadata length 与样本折线长度最大绝对差分别约 0.220/0.345/0.080/0.042 m；当前四套
+  障碍 geometry 均为单 polygon、无洞的 MultiPolygon，符合 ArenaLoader 的有限解析能力。
+
+已确认的后续修复/验证点：ring_small 的 agent_config.info 和 vehicle_set.info 实际各 14 项，
+两个 num 字段却都为 11；ring_tiny agent 实际 13、vehicle 实际 15，两个 num 仍为 11，且车辆
+ID 1002/1003 没有对应 agent_config。ArenaLoader 当前忽略 num，因此仿真仍加载 info 全量，
+但任何信任 num 的工具会少分配/漏处理；缺 agent 配置的车辆无法直接创建对应语义地图管理器。
+四场景没有 schema/version/单位/坐标原点/生成工具 hash/随机种子 manifest，无法证明数据由
+哪次 QGIS/脚本生成。Lane 长度存在小幅 metadata 偏差，未定义允许公差；拓扑只验证“引用存在”，
+尚未验证 father-child、left-right 互反、换道标志对称、几何端点连续或 Lane 交叉合法性。车辆
+初始位置是否落在可行 Lane、车间/障碍碰撞、agent type 与 vehicle subclass/type 一致性也未
+检查。GeoJSON 中无效障碍仍保留在文件，由 loader 运行时过滤；不同消费者可能处理不一致。
+CMake 第一条 install 已安装四场景，末尾又重复安装；中间还安装不存在的 `data/` 目录，干净
+构建时可能直接报错。资源包设置无意义的 C++17；package version 0.0.0、TODO license/maintainer
+和泛化 description 不满足发布/论文归档。M1 应引入 JSON Schema/场景 manifest 和统一 linter，
+修正 num/ID 集，验证拓扑互反、几何连续、初始碰撞和 agent-vehicle 对齐，并让 CMake 只安装
+存在目录一次；每个实验场景应记录 schema version、生成命令、源 CRS/origin、hash 和用途标签。

@@ -7,8 +7,10 @@
   <maintainer email="wdingae@todo.com">HKUST_UAV_GROUP</maintainer>
   <license>TODO</license>
 
+  <!-- 纯资源包只需要 ament_cmake 注册并安装场景目录。 -->
   <buildtool_depend>ament_cmake</buildtool_depend>
 
+  <!-- 声明标准 ament_cmake 构建类型。 -->
   <export>
     <build_type>ament_cmake</build_type>
   </export>
