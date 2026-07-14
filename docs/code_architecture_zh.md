@@ -79,7 +79,10 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.2c3a `core/common` IDM、IIDM 与 ACC 纵向模型。
 - [x] M0.2c3b `core/common` MOBIL 换道收益与横向行为概率。
 - [x] M0.2c4 `core/common` FrenetPrimitive 双模式五次运动基元。
-- [ ] M0.2c5 `core/common` 可视化工具。
+- [x] M0.2c5a `core/common` 轨迹线条与通用 Marker 属性工具。
+- [ ] M0.2c5b `core/common` Pose、PointCloud 与基础几何 Marker。
+- [ ] M0.2c5c `core/common` Mesh、箭头、线条、文本与车辆 Marker。
+- [ ] M0.2c5d `core/common` 障碍物、SemanticBehavior 与 GridMap 可视化。
 - [ ] M0.3 语义地图、前向仿真、预测和行为规划。
 - [ ] M0.4 SSC、车辆模型、物理仿真、playground 与配置。
 - [ ] M0.5 全仓覆盖审计和遗漏补齐。
@@ -421,3 +424,21 @@ BR-EUDM 用持续 belief 与交互 rollout 替代单帧 MOBIL 启发式的重要
 100 m 虚拟跨度，但 jerk 指标和 `lateral_T()` 仍使用实际 delta_s；负 delta_s 会使从
 0 到负上限的“平方积分”得到负值。公开 `is_lateral_independent_` 或单独替换多项式后，
 缓存端状态和导数解释可能不一致；域外外推也没有幅值保护。这些需纳入 primitive 回归。
+
+## 25. M0.2c5a：轨迹线条与 Marker 通用属性
+
+- `VisualizationUtil` 是无状态静态转换层，不参与规划数值；大多数接口向已有
+  Marker/MarkerArray 追加数据，header、frame、namespace 和 id 由调用方后置补全；
+- 多项式、Spline、Lane、Trajectory 和 State 序列被采样为半开参数区间的 LINE_STRIP；
+  单个轨迹采样失败会跳过该点；
+- 固定维向量只映射前三维到 Point/Point32，缺失分量补零、额外分量忽略；
+- 通用填充函数可统一颜色、尺度、时间戳和 lifetime；`FillHeaderIdInMarkerArray` 从 0
+  重编号当前数组，并为上一帧多余 id 追加 DELETE Marker。
+
+已确认的后续修复/验证点：`GetMarkerByPolynomial` 调用不存在的
+`PolynomialND::evaluate(s)` 返回值重载，模板实例化时无法编译。所有采样循环都未验证
+正 step，且默认排除终点、保留旧 points/markers。`FillScaleColorInMarker` 会重置已有
+pose；渐变函数忽略 `if_ascending`、不清空 colors，最后一点也达不到色图上界。
+删除 Marker 没有继承被删对象 namespace，非空 namespace 时可能删不到。输出指针和
+NaN/Inf 均不检查；头文件使用 rclcpp::Time/Duration 但依赖间接包含。以上不影响规划
+结果，但会妨碍 ROS2 自包含编译、调试复现和长时间运行的消息大小稳定性。

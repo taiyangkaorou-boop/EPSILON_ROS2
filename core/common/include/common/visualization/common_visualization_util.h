@@ -1,7 +1,7 @@
 /**
  * @file common_visualization_util.h
  * @author HKUST Aerial Robotics Group
- * @brief
+ * @brief common 几何、轨迹、语义对象到 ROS2 可视化消息的转换工具。
  * @version 0.1
  * @date 2019-03-18
  *
@@ -37,30 +37,26 @@
 #include "visualization_msgs/msg/marker_array.hpp"
 #include "tf2/LinearMath/Quaternion.h"
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
-
-
-
-
-
 namespace common {
 
+/**
+ * @brief 无状态 ROS2 可视化消息构造与批量属性填充工具。
+ *
+ * 大多数接口采用追加语义，不清空 Marker 的 points/colors 或 MarkerArray；header、
+ * frame_id、namespace 和时间戳通常由调用方或专用填充函数统一设置。本类不参与规划
+ * 数值和碰撞判定。
+ */
 class VisualizationUtil {
  public:
   /**
-   * @brief Get the marker from polynomial parameterization
-   * @notice this function do not take care of the header (incl. stamp, frame,
-   * and marker id)
-   *
-   * @tparam N_DEG
-   * @tparam N_DIM
-   * @param poly input polynomial
-   * @param s0 evaluation start
-   * @param s1 evaluation end
-   * @param step evaluation step
-   * @param scale scale for the three dimension
-   * @param color color in the order of r, g, b, a
-   * @param marker output
-   * @return ErrorType
+   * @brief 在 `[s0,s1)` 上采样向量多项式并追加为 LINE_STRIP 点。
+   * @param poly 输入向量多项式。
+   * @param s0 参数起点。
+   * @param s1 参数终点，不包含。
+   * @param step 采样步长，baseline 要求为正。
+   * @param scale Marker 三轴尺度。
+   * @param color ARGB 颜色。
+   * @param marker 输出 Marker；不设置 header、frame、namespace 或 id，也不清空旧点。
    */
   template <int N_DEG, int N_DIM>
   static ErrorType GetMarkerByPolynomial(const PolynomialND<N_DEG, N_DIM>& poly,
@@ -70,10 +66,12 @@ class VisualizationUtil {
                                          const ColorARGB color,
                                          visualization_msgs::msg::Marker* marker
 ) {
+    // LINE_STRIP 使用 points 顺序连接采样位置。
     marker->type = visualization_msgs::msg::Marker::LINE_STRIP;
     marker->action = visualization_msgs::msg::Marker::MODIFY;
     FillScaleColorInMarker(scale, color, marker);
     for (decimal_t s = s0; s < s1; s += step) {
+      // PolynomialND 当前没有返回值形式的 evaluate(s) 重载；模板实例化时会暴露错误。
       auto v = poly.evaluate(s);
       geometry_msgs::msg::Point point;
       ConvertVectorToPoint<N_DIM>(v, &point);
@@ -83,17 +81,13 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Get the Marker By Spline object
-   *
-   * @tparam N_DEG
-   * @tparam N_DIM
-   * @param spline
-   * @param step
-   * @param scale
-   * @param color
-   * @param offset_z
-   * @param marker
-   * @return ErrorType
+   * @brief 从样条起点到终点按固定步长采样并追加为 LINE_STRIP。
+   * @param spline 输入分段样条。
+   * @param step 正采样步长。
+   * @param scale Marker 尺度。
+   * @param color Marker 颜色。
+   * @param offset_z 所有采样点使用的固定 z 偏移。
+   * @param marker 输出 Marker，不清空已有点。
    */
   template <int N_DEG, int N_DIM>
   static ErrorType GetMarkerBySpline(const Spline<N_DEG, N_DIM>& spline,
@@ -105,6 +99,7 @@ class VisualizationUtil {
     marker->type = visualization_msgs::msg::Marker::LINE_STRIP;
     marker->action = visualization_msgs::msg::Marker::MODIFY;
     FillScaleColorInMarker(scale, color, marker);
+    // 使用半开参数域，精确终点不会加入线条。
     for (decimal_t s = spline.begin(); s < spline.end(); s += step) {
       Vecf<N_DIM> ret;
       if (spline.evaluate(s, 0, &ret) == kSuccess) {
@@ -119,23 +114,14 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Get the Marker By Lane object
-   *
-   * @param lane
-   * @param step
-   * @param scale
-   * @param color
-   * @param offset_z
-   * @param marker
-   * @return ErrorType
+   * @brief 将有效 Lane 的位置样条解包后复用样条 LINE_STRIP 构造接口。
+   * @return Lane 无效时返回 kIllegalInput，否则返回 kSuccess。
    */
   static ErrorType GetMarkerByLane(const Lane& lane, const decimal_t step,
                                    const Vec3f& scale, const ColorARGB& color,
                                    const decimal_t offset_z,
                                    visualization_msgs::msg::Marker* marker
 ) {
-    // unwrap the parameterization
-
     if (!lane.IsValid()) return kIllegalInput;
     GetMarkerBySpline<LaneDegree, LaneDim>(lane.position_spline(), step, scale,
                                            color, offset_z, marker);
@@ -143,25 +129,25 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Get the Marker Array By Trajectory object
-   *
-   * @param traj
-   * @param step
-   * @param scale
-   * @param color
-   * @param offset_z
-   * @param marker_arr
-   * @return ErrorType
+   * @brief 采样世界轨迹状态位置，构造一个 LINE_STRIP 并追加到 MarkerArray。
+   * @param traj 输入轨迹。
+   * @param step 正时间/参数步长。
+   * @param scale 线条尺度。
+   * @param color 线条颜色。
+   * @param offset_z 固定高度偏移。
+   * @param marker_arr 输出数组，不清空已有 Marker。
    */
   static ErrorType GetMarkerArrayByTrajectory(
       const Trajectory& traj, const decimal_t step, const Vec3f& scale,
       const ColorARGB& color, const decimal_t offset_z,
       visualization_msgs::msg::MarkerArray* marker_arr) {
+    // 只检查轨迹有效标记，单个采样失败会被跳过而不中止整条可视化。
     if (!traj.IsValid()) return kIllegalInput;
     visualization_msgs::msg::Marker traj_mk;
     traj_mk.type = visualization_msgs::msg::Marker::LINE_STRIP;
     traj_mk.action = visualization_msgs::msg::Marker::MODIFY;
     FillScaleColorInMarker(scale, color, &traj_mk);
+    // 终点不采样，step<=0 时可能无法结束。
     for (decimal_t s = traj.begin(); s < traj.end(); s += step) {
       common::State state;
       if (traj.GetState(s, &state) == kSuccess) {
@@ -177,12 +163,8 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Convert vector to ROS Point
-   *
-   * @tparam N_DIM
-   * @param vec
-   * @param point
-   * @return ErrorType
+   * @brief 把固定维 double 向量的前三维复制到 ROS Point。
+   * @note 缺失维度补零，三维以上分量忽略；当前参数按值复制输入向量。
    */
   template <int N_DIM>
   static ErrorType ConvertVectorToPoint(const Vecf<N_DIM> vec,
@@ -191,6 +173,7 @@ class VisualizationUtil {
     point->y = 0.0;
     point->z = 0.0;
 
+    // 使用编译期维数分支，只映射 x/y/z。
     if (N_DIM >= 1) {
       point->x = vec[0];
     }
@@ -204,12 +187,8 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Convert vector to ROS Point32
-   *
-   * @tparam N_DIM
-   * @param vec
-   * @param point
-   * @return ErrorType
+   * @brief 把固定维向量前三维转换为 ROS Point32 单精度字段。
+   * @note 缺失维度补零，额外维度忽略。
    */
   template <int N_DIM>
   static ErrorType ConvertVectorToPoint32(const Vecf<N_DIM>& vec,
@@ -231,12 +210,10 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Get the marker array from state vec
-   *
-   * @param state_vec a vector of states (probably from one trajectory)
-   * @param color color
-   * @param marker_arr returned marker array
-   * @return ErrorType
+   * @brief 把 State 序列的位置连接为固定线宽 LINE_STRIP 并追加到 MarkerArray。
+   * @param state_vec 通常来自同一条轨迹的世界状态序列。
+   * @param color 线条颜色。
+   * @param marker_arr 输出数组，不清空旧 Marker。
    */
   static ErrorType GetMarkerArrayByStateVector(
       const vec_E<State>& state_vec, const ColorARGB& color,
@@ -256,18 +233,14 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief
-   *
-   * @param scale
-   * @param color
-   * @param marker
-   * @return ErrorType
+   * @brief 把 Marker pose 重置为原点单位姿态，并填充尺度和颜色。
+   * @note 若 Marker 已有位置/姿态，本函数会覆盖它们。
    */
   static ErrorType FillScaleColorInMarker(const Vec3f scale,
                                           const ColorARGB color,
                                           visualization_msgs::msg::Marker* marker
 ) {
-    // default pose at origin
+    // 默认 pose 使用世界原点和单位四元数。
     marker->pose.position.x = 0.0;
     marker->pose.position.y = 0.0;
     marker->pose.position.z = 0.0;
@@ -281,13 +254,7 @@ class VisualizationUtil {
     return kSuccess;
   }
 
-  /**
-   * @brief
-   *
-   * @param color
-   * @param marker
-   * @return ErrorType
-   */
+  /// 将 ColorARGB 的 a/r/g/b 分量复制到 ROS Marker 颜色。
   static ErrorType FillColorInMarker(const ColorARGB& color,
                                      visualization_msgs::msg::Marker* marker
 ) {
@@ -298,13 +265,7 @@ class VisualizationUtil {
     return kSuccess;
   }
 
-  /**
-   * @brief
-   *
-   * @param scale
-   * @param marker
-   * @return ErrorType
-   */
+  /// 将三维尺度向量复制到 Marker scale.x/y/z。
   static ErrorType FillScaleInMarker(const Vec3f scale,
                                      visualization_msgs::msg::Marker* marker
 ) {
@@ -315,17 +276,16 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief
-   *
-   * @param if_ascending
-   * @param marker
-   * @return ErrorType
+   * @brief 按 points 顺序追加 Jet 渐变颜色。
+   * @param if_ascending 当前实现未使用，颜色始终从低值向高值递增。
+   * @param marker 输入点集及输出 colors；旧颜色不会清空。
    */
   static ErrorType FillGradientColorInMarker(
       const bool if_ascending, visualization_msgs::msg::Marker* marker
 ) {
     int num = marker->points.size();
     for (int i = 0; i < num; ++i) {
+      // 使用 i/num，最后一个点不会达到色图上界 1.0。
       double k = (double)i / (double)num;
       common::ColorARGB c = common::GetJetColorByValue(k, 1.0, 0.0);
       std_msgs::msg::ColorRGBA c_ros;
@@ -339,19 +299,18 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief
-   *
-   * @param time_stamp
-   * @param frame_id
-   * @param last_array_size
-   * @param marker_arr
-   * @return ErrorType
+   * @brief 为数组内 Marker 依次设置 id/header，并追加删除上一帧多余 id 的 Marker。
+   * @param time_stamp 统一 ROS 时间戳。
+   * @param frame_id 统一坐标系名称。
+   * @param last_array_size 上一帧 Marker 数量。
+   * @param marker_arr 当前帧数组；函数会在末尾追加 DELETE Marker。
    */
   static ErrorType FillHeaderIdInMarkerArray(
       const rclcpp::Time time_stamp, 
       const std::string frame_id,
       const int last_array_size, 
       visualization_msgs::msg::MarkerArray* marker_arr) {
+    // 当前 Marker 按数组顺序从 0 重新编号，同时覆盖各自原 header。
     int marker_id = 0;
     for (auto& mk : marker_arr->markers) {
       mk.id = marker_id;
@@ -360,6 +319,7 @@ class VisualizationUtil {
       marker_id++;
     }
 
+    // 若上一帧更长，为缺失 id 追加删除消息；namespace 保持默认空字符串。
     visualization_msgs::msg::Marker delete_mk;
     delete_mk.header.stamp = time_stamp;
     delete_mk.header.frame_id = frame_id;
@@ -372,11 +332,7 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief
-   *
-   * @param time_stamp
-   * @param marker_arr
-   * @return ErrorType
+   * @brief 覆盖 MarkerArray 中所有 Marker 的 header.stamp，保留其他 header 字段。
    */
   static ErrorType FillStampInMarkerArray(
       const rclcpp::Time time_stamp, visualization_msgs::msg::MarkerArray* marker_arr) {
@@ -387,11 +343,7 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief
-   *
-   * @param duration
-   * @param marker_arr
-   * @return ErrorType
+   * @brief 为 MarkerArray 中所有 Marker 设置统一生命周期。
    */
   static ErrorType FillLifeTimeInMarkerArray(
       const rclcpp::Duration duration,
