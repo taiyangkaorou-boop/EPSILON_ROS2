@@ -59,7 +59,11 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 ## 4. 注释覆盖与研究开发规则
 
 - [x] M0.1 系统入口、launch 和辅助工具。
-- [ ] M0.2 `core/common` 公共类型、数学、轨迹与求解器。
+- [x] M0.2a1 `core/common` 通用配置、宏、计时、线程池、色图与工具函数。
+- [ ] M0.2a2 `core/common` 语义与几何类型。
+- [ ] M0.2a3 `core/common` 状态与车道类型。
+- [ ] M0.2b `core/common` 数学、样条、轨迹与圆弧。
+- [ ] M0.2c `core/common` 求解器、安全模型、车辆行为模型与可视化。
 - [ ] M0.3 语义地图、前向仿真、预测和行为规划。
 - [ ] M0.4 SSC、车辆模型、物理仿真、playground 与配置。
 - [ ] M0.5 全仓覆盖审计和遗漏补齐。
@@ -67,3 +71,15 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 后续算法任务使用固定 `dev` 分支；每个小任务必须满足：工作树范围清晰、静态检查
 通过、提交信息包含模块名、创建 annotated tag、推送提交和标签，并在本索引中更新
 新增模块的数据输入、输出、状态所有权和失败回退边界。
+
+## 5. M0.2a1：公共通用工具
+
+| 组件 | 职责与边界 |
+|---|---|
+| `basics.h` | 统一误差码、双精度数值类型、Eigen 对齐容器和数值容差；不承载业务状态 |
+| `config.h` | 固定车道/轨迹多项式阶数与空间维度；后续若改为运行时配置需独立迁移 |
+| `macros.h` | 注册 backward-cpp 崩溃回溯；每个可执行文件只应展开一次 |
+| `tic_toc.h` | 记录墙钟耗时；不等同于 ROS 仿真时间或确定性 deadline 监控 |
+| `thread_pool.h` | FIFO 异步任务执行与 future 返回；任务队列状态由互斥锁和条件变量保护 |
+| `colormap.*` | 数值/名称到 ARGB 颜色的可视化映射；不参与风险数值计算 |
+| `tool_func.*` | 字符串切分、笛卡尔积、数值格式化和区间采样；调用方负责输入前置条件 |

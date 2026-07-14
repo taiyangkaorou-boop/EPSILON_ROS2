@@ -1,7 +1,7 @@
 /**
  * @file colormap.cc
  * @author HKUST Aerial Robotics Group
- * @brief
+ * @brief 定义具名色表、Jet/Autumn 查找表及连续 Jet 映射实现。
  * @version 0.1
  * @date 2019-03-17
  *
@@ -10,6 +10,7 @@
 #include "common/basics/colormap.h"
 
 namespace common {
+// 常用具名颜色，主要供 ROS/RViz 可视化模块按语义选择颜色。
 std::map<std::string, ColorARGB> cmap{
     {"black", ColorARGB(1.0, 0.0, 0.0, 0.0)},
     {"white", ColorARGB(1.0, 1.0, 1.0, 1.0)},
@@ -33,6 +34,7 @@ std::map<std::string, ColorARGB> cmap{
     {"medium orchid", ColorARGB(1.0, 0.729, 0.333, 0.827)},
     {"grey", ColorARGB(1.0, 0.5, 0.5, 0.5)}};
 
+// Jet 色表按 0.1 间隔离散采样，键表示归一化强度。
 std::map<decimal_t, ColorARGB> jet_map{
     {0.0, ColorARGB(1.0, 0.0, 0.0, 0.6667)},
     {0.1, ColorARGB(1.0, 0.0, 0.0, 1.0000)},
@@ -46,6 +48,7 @@ std::map<decimal_t, ColorARGB> jet_map{
     {0.9, ColorARGB(1.0, 1.0000, 0.3333, 0.0)},
     {1.0, ColorARGB(1.0, 1.0000, 0.0, 0.0)}};
 
+// Autumn 色表从红色平滑过渡到黄色，透明度固定为 0.5。
 std::map<decimal_t, ColorARGB> autumn_map{
     {1.0, ColorARGB(0.5, 1.0, 0.0, 0.0)},
     {0.95, ColorARGB(0.5, 1.0, 0.05, 0.0)},
@@ -71,17 +74,20 @@ std::map<decimal_t, ColorARGB> autumn_map{
 
 ColorARGB GetColorByValue(const decimal_t val,
                           const std::map<decimal_t, ColorARGB>& m) {
+  // upper_bound 实现右开区间查找；输入越过最大键时不能解引用 end()。
   auto it = m.upper_bound(val);
   return it->second;
 }
 
 ColorARGB GetJetColorByValue(const decimal_t val_in, const decimal_t vmax,
                              const decimal_t vmin) {
+  // 先截断输入，确保后续四段线性映射始终落在指定数值范围内。
   decimal_t val = val_in;
   if (val < vmin) val = vmin;
   if (val > vmax) val = vmax;
   double dv = vmax - vmin;
 
+  // 四个四分位区间依次完成蓝→青→黄→红的通道插值。
   ColorARGB c(1.0, 1.0, 1.0, 1.0);
   if (val < (vmin + 0.25 * dv)) {
     c.r = 0;
