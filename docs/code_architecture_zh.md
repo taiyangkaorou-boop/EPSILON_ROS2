@@ -109,7 +109,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [ ] M0.4 SSC、车辆模型、物理仿真、playground 与配置。
 - [x] M0.4a1 车辆模型 PID、IDM/CTX-IDM 速度包装与 Pure Pursuit 控制器。
 - [x] M0.4a2 IDM 与 Context-IDM 连续模型。
-- [ ] M0.4a3 VehicleModel 基类与 IdealSteerModel。
+- [x] M0.4a3 VehicleModel 基类与 IdealSteerModel。
 - [ ] M0.4b SSC 地图、规划器、ROS/可视化与配置。
 - [ ] M0.4c 物理仿真器与 arena loader。
 - [ ] M0.4d playground、集成入口、launch 与构建配置。
@@ -1073,3 +1073,28 @@ odeint 系统函数第三参数是当前积分时间 t，两个 operator 都命�
 boost::placeholders 还污染包含者命名空间；空析构和重复状态同步没有必要。M1 应修正
 odeint 回调时间语义，用显式步长约束或受控积分器，完整融合 IDM/目标跟踪（含优先级或
 安全屏障），并增加跟驰、急刹、零 dt 和目标追踪的解析边界测试。
+
+## 53. M0.4a3：运动学自行车与理想转向模型
+
+- `VehicleModel` 的 odeint 状态为 `[x,y,yaw,steer,velocity]`，输入为前轮转角速度和纵向
+  加速度。微分方程使用运动学自行车关系推进平面位置和航向；Step 后归一化 yaw、对转角
+  施加对称机械限幅，再由 `tan(steer)/wheelbase` 回写曲率和本周期纵向加速度；
+- `IdealSteerModel` 的 odeint 状态为 `[x,y,yaw,velocity,steer]`，上层输入则是目标前轮转角
+  和目标速度。Step 先从当前曲率恢复转角，再限制目标非负速度和最大机械转角；
+- `TruncateControl` 先按上一周期 acceleration 约束纵向 jerk 与加/减速度并重算可达速度，
+  再由 `v^2*tan(steer)/wheelbase` 计算横向加速度，限制横向 jerk/加速度并反解可达转角，
+  最后限制转角速度；积分时纵向加速度和转角速度在整个 dt 内保持常值；
+- 两个模型都把公开 `common::State` 与固定长度 odeint 数组双向同步，不推进时间戳；时间由
+  上层 forward simulator 管理。普通模型不在 set_control 中限幅，理想模型把控制约束集中
+  到 Step/TruncateControl。
+
+已确认的后续修复/验证点：`VehicleModel` 默认构造只初始化 2.5 m 轴距，
+`max_steering_angle_` 未初始化，随后 Step 的转角比较和截断构成未定义行为。两个模型都不
+检查 dt、轴距、状态、控制和参数的有限性/物理范围；dt=0 会使理想模型在加速度、jerk 和
+转角速度计算中多次除零，轴距为零会使 yaw rate、曲率或横向加速度除零。普通模型允许
+速度积分为负，set_control 的限幅仍是 TODO。理想模型虽然保存 `max_curvature_`，对应限速
+逻辑却被注释，因此参数实际无效；低速横向加速度反解只用极小固定分母，可能生成激进转角，
+反解和转角速率限制后也没有再次显式应用 `max_steering_angle_`。两个头文件在全局作用域
+引入 boost placeholders，污染所有包含者命名空间。M1 应初始化并校验全部参数，统一
+dt/有限性错误契约，建立低速稳定的曲率—横向加速度约束，真正应用最大曲率/机械转角，
+并增加零 dt、零轴距、低速大转角、负速、jerk 饱和和长时积分边界测试。
