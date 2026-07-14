@@ -75,7 +75,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.2b2c3 `core/common` 基础 Bezier corridor QP。
 - [x] M0.2b3 `core/common` 轨迹抽象、Frenet Bezier 与 FrenetPrimitive 包装。
 - [x] M0.2c1 `core/common` 加权最小二乘 QP 与 OOQP/MA27 接口。
-- [ ] M0.2c2 `core/common` RSS 安全检查模型。
+- [x] M0.2c2 `core/common` RSS 安全距离、速度区间与车辆检查。
 - [ ] M0.2c3 `core/common` IDM 与 MOBIL 行为模型。
 - [ ] M0.2c4 `core/common` FrenetPrimitive。
 - [ ] M0.2c5 `core/common` 可视化工具。
@@ -345,3 +345,21 @@ release 下短输入会越界，且改系数不更新有效标记或端状态。
 `ignoreUnknownError=true`，会把未确认收敛的 UNKNOWN 迭代点当成功，且返回前不复核
 等式/不等式残差。W 经稠密矩阵再转稀疏，打印也会稠密化大矩阵；裸 `new/delete` 在
 异常路径不具备 RAII。M1 应先加维度/残差检查、零约束安全指针和严格状态策略。
+
+## 21. M0.2c2：简化 RSS 安全距离与速度区间
+
+- `RssConfig` 保存响应时间、纵横向响应加速度、主动/被动制动幅值和固定横向裕量；
+- 纵向距离公式按对象在前/后及速度方向，比较“响应后被动制停”和“立即主动制停”
+  路程；横向公式按左右相对位置和双方横向速度符号组合主动/被动制停路程；
+- FrenetState 重载把车辆视为点，只有纵向距离和横向距离同时侵入阈值才判不安全；
+- Vehicle 重载先投影到同一 Lane，横向阈值加入两车半宽，纵向后轴间距扣除前后悬，
+  再反解自车安全速度区间；前车威胁产生上界，后车威胁可能产生“不能过慢”的下界；
+- 该点质量重载被 MOBIL 用于换道前后车安全筛选，默认采用 RssConfig 固定参数。
+
+这并不是完整 RSS 状态机：没有危险开始时间、proper response 持续控制、责任归属、
+多对象联合约束或对感知/预测不确定性的处理，只是单时刻 Frenet 运动学阈值检查。
+已确认的工程风险包括：配置不验证非负、制动分母和能力顺序，二次反解不检查判别式；
+自车倒车直接判安全；批量速度数组不检查长度；Frenet 可用性标志和输出指针不检查。
+点质量版本忽略车身尺寸，车辆版也只用轴向长度/宽度而非航向 OBB；合法时速度上下界
+统一写零，不能解释为真实可行区间。阈值相等被视为安全，后向重叠没有前向重叠的立即
+处理。后续 BR-EUDM/backup-RSS 必须把这些简化与正式安全层清楚区分。
