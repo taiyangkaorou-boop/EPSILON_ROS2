@@ -111,6 +111,11 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.4a2 IDM 与 Context-IDM 连续模型。
 - [x] M0.4a3 VehicleModel 基类与 IdealSteerModel。
 - [ ] M0.4b SSC 地图、规划器、ROS/可视化与配置。
+- [x] M0.4b1 SSC 地图抽象接口与 SemanticMapManager 适配器。
+- [ ] M0.4b2 SSC 时空占用栅格与 corridor 地图。
+- [ ] M0.4b3 SSC 轨迹规划与优化主流程。
+- [ ] M0.4b4 SSC ROS2 服务端与可视化。
+- [ ] M0.4b5 SSC proto、配置、RViz 与构建元数据。
 - [ ] M0.4c 物理仿真器与 arena loader。
 - [ ] M0.4d playground、集成入口、launch 与构建配置。
 - [ ] M0.5 全仓覆盖审计和遗漏补齐。
@@ -1098,3 +1103,32 @@ odeint 回调时间语义，用显式步长约束或受控积分器，完整融�
 引入 boost placeholders，污染所有包含者命名空间。M1 应初始化并校验全部参数，统一
 dt/有限性错误契约，建立低速稳定的曲率—横向加速度约束，真正应用最大曲率/机械转角，
 并增加零 dt、零轴距、低速大转角、负速、jerk 饱和和长时积分边界测试。
+
+## 54. M0.4b1：SSC 地图抽象接口与语义地图适配器
+
+- `SscPlannerMapItf` 把 SSC 核心算法与 ROS/SemanticMapManager 隔离，统一暴露快照时间戳、
+  自车/状态、行为参考 Lane、按 ID 查询的语义 Lane、二维障碍 GridMap、世界坐标障碍栅格、
+  碰撞检查、离散横向行为，以及候选行为下的自车/周车前向 rollout；
+- `SscPlannerAdapter` 持有 `shared_ptr<SemanticMapManager>`。ROS 服务端每个规划周期复制最新
+  SemanticMapManager 后调用 set_map，适配器再从同一快照向 SscPlanner 提供数据；
+- `GetEgoReferenceLane` 与 `GetLocalReferenceLane` 当前完全相同，都返回
+  `ego_behavior().ref_lane` 并要求 Lane 有效；`GetEgoDiscretBehavior` 拒绝 kUndefined；
+- 两个 forward trajectory 重载都只用 `forward_behaviors` 非空作为可用条件，三输出版本还
+  深拷贝每个候选行为对应的周车 ID—轨迹 map；Lane、SemanticLaneSet、GridMap、障碍集合
+  和 SemanticBehavior 均经值拷贝跨越接口边界；
+- 碰撞接口委托 SemanticMapManager 的车辆参数/状态碰撞检查，Lane ID 查询先取得完整
+  SemanticLaneSet，再只返回命中 SemanticLane 的中心线 Lane。
+
+已确认的后续修复/验证点：抽象基类没有 virtual 析构函数，经基类指针释放派生对象会产生
+未定义行为；所有接口均为非常量成员且使用裸输出指针，没有空指针、对象生命周期、快照
+一致性或并发读取契约。set_map 接受 nullptr 仍把 is_valid_ 置 true，GetTimeStamp 又完全不
+检查状态并直接解引用 map_；is_valid_ 与 shared_ptr 可脱节且没有失效/reset 路径。所有 getter
+只检查独立标志，不检查输出指针；缺 Lane、未定义行为和无效适配器都混用 kWrongStatus。
+两个参考 Lane 接口重复。forward rollout 只检查行为非空，不校验 behaviors、自车轨迹和
+周车轨迹数量、时域、时间戳或车辆 ID 对齐，后续按下标关联可能越界或错配。适配器反复调用
+按值 getter，单次请求可能重复深拷贝 SemanticBehavior；Lane ID 查询还复制完整 LaneSet，
+障碍地图和预测轨迹的复制开销随场景规模增长。碰撞函数忽略底层 ErrorType 并固定返回成功，
+底层失败时 res 可能未定义。接口对 vector/unordered_map 等还依赖传递 include。M1 应加入
+virtual 析构、const/noexcept 与非空输出契约，以不可变 shared snapshot/read view 替代独立
+有效标志和重复深拷贝，严格传播 Status，并为 rollout 建立候选数、时间轴、ID 和尺寸一致性
+校验及空地图/底层碰撞失败测试。
