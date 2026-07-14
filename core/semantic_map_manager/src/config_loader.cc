@@ -7,15 +7,19 @@ using Json = nlohmann::json;
 ErrorType ConfigLoader::ParseAgentConfig(AgentConfigInfo *p_agent_config) {
   printf("\n[ConfigLoader] Loading vehicle set\n");
 
+  // 每次解析都重新打开配置文件，并直接用流提取运算符构造完整 JSON 根节点。
   std::fstream fs(agent_config_path_);
   Json root;
   fs >> root;
 
+  // 固定读取 agent_config.info 数组；缺失键、类型错误和解析异常均未在本层捕获。
   Json agent_config_json = root["agent_config"];
   int num = static_cast<int>(agent_config_json["info"].size());
   for (int i = 0; i < num; ++i) {
     Json agent = agent_config_json["info"][i];
+    // 遍历全部 agent，仅处理 ID 与当前 ego_id_ 相同的条目。
     if (agent["id"].get<int>() != ego_id_) continue;
+    // 栅格宽、高、分辨率和周车搜索半径是匹配条目的必填字段。
     p_agent_config->obstacle_map_meta_info = common::GridMapMetaInfo(
         agent["obstacle_map_meta_info"]["width"].get<double>(),
         agent["obstacle_map_meta_info"]["height"].get<double>(),
@@ -24,16 +28,19 @@ ErrorType ConfigLoader::ParseAgentConfig(AgentConfigInfo *p_agent_config) {
         agent["surrounding_search_radius"].get<double>();
     p_agent_config->enable_openloop_prediction =
         agent["enable_openloop_prediction"].get<bool>();
+    // 跟踪噪声为可选字段，缺失时保留 AgentConfigInfo 默认 false。
     if (agent.count("enable_tracking_noise")) {
       p_agent_config->enable_tracking_noise =
           agent["enable_tracking_noise"].get<bool>();
     }
+    // 日志开关存在时同时读取 log_file；缺失开关则保留默认 false 和空路径。
     if (agent.count("enable_log")) {
       p_agent_config->enable_log = agent["enable_log"].get<bool>();
       p_agent_config->log_file = agent["log_file"].get<std::string>();
     }
   }
 
+  // 无论是否找到匹配 ego，都会打印当前输出对象并返回成功。
   p_agent_config->PrintInfo();
   fs.close();
   return kSuccess;

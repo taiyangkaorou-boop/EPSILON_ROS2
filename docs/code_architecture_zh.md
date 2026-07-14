@@ -93,6 +93,12 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.3b2d 参考 Lane、Lane ID 状态机与参数访问器。
 - [x] M0.3b3 BehaviorPlanner ROS 服务与可视化。
 - [ ] M0.3c SemanticMapManager 支撑组件与主类。
+- [x] M0.3c1 SemanticMapManager 基础配置类型与 JSON ConfigLoader。
+- [ ] M0.3c2 TrafficSignalManager。
+- [ ] M0.3c3 DataRenderer。
+- [ ] M0.3c4 ROS adapter。
+- [ ] M0.3c5 SemanticMapManager visualizer。
+- [ ] M0.3c6 SemanticMapManager 主类分段审计。
 - [ ] M0.4 SSC、车辆模型、物理仿真、playground 与配置。
 - [ ] M0.5 全仓覆盖审计和遗漏补齐。
 
@@ -713,3 +719,22 @@ rollout、安全裕量和碰撞点；帧名、topic、颜色、尺寸和 z 高�
 保护宏命名为 ROS_ADAPTER 而非 VISUALIZER，且包含多项未使用的 tf2/vehicle_msgs 头；
 package.xml/CMake 对直接依赖的声明也不完整，当前可能依赖传递 include/link。M1/构建
 配置审计应补齐依赖和空值契约，并采用抽样折线、行为分色、winner 强调及可选风险图层。
+
+## 39. M0.3c1：AgentConfigInfo 与 JSON ConfigLoader
+
+- `AgentConfigInfo` 集中保存局部障碍物 GridMap 元信息、周车搜索半径、开环预测/跟踪噪声/
+  日志/快速 Lane LUT 开关和日志路径；布尔项除快速 LUT 默认为 false，快速 LUT 默认为 true；
+- `ConfigLoader` 只保存目标 ego ID 和 JSON 路径。解析时重新打开文件，读取固定的
+  `agent_config.info` 数组并线性遍历 ID；匹配条目把宽、高、分辨率、搜索半径和开环
+  预测作为必填字段，跟踪噪声与日志为可选字段；
+- 如果 `enable_log` 键存在，函数同时读取 `log_file`。遍历结束后统一打印输出配置，显式
+  关闭文件并固定返回成功；重复 ego ID 会按遍历顺序由后项覆盖前项。
+
+已确认的后续修复/验证点：默认构造的 `ConfigLoader::ego_id_` 和
+`AgentConfigInfo::surrounding_search_radius` 未初始化；输出指针、空路径、文件打开和 JSON
+解析状态均不检查，文件/键/类型异常直接向外抛出。没有匹配 ego 时仍打印可能未初始化的
+配置并返回成功，也没有检测重复 ID。`enable_log` 存在但 `log_file` 缺失会抛异常，所有
+尺寸/分辨率/半径缺少正值和有限性验证。`enable_fast_lane_lut` 从未解析，始终保持 true。
+头文件还未直接包含其实际使用的 string/fstream 依赖，依赖其他头的传递包含。M1 应为
+配置类型提供完整确定性默认值，采用临时对象事务式解析和 schema 校验，区分文件、语法、
+缺键、无匹配 ego 等错误，并让所有功能开关可显式配置和可测试。
