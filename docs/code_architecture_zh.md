@@ -107,6 +107,12 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.3c6f 局部/参考 Lane 生成与采样。
 - [x] M0.3c6g 前后车、交通查询与 LaneNet 距离。
 - [ ] M0.4 SSC、车辆模型、物理仿真、playground 与配置。
+- [x] M0.4a1 车辆模型 PID、IDM/CTX-IDM 速度包装与 Pure Pursuit 控制器。
+- [ ] M0.4a2 IDM 与 Context-IDM 连续模型。
+- [ ] M0.4a3 VehicleModel 基类与 IdealSteerModel。
+- [ ] M0.4b SSC 地图、规划器、ROS/可视化与配置。
+- [ ] M0.4c 物理仿真器与 arena loader。
+- [ ] M0.4d playground、集成入口、launch 与构建配置。
 - [ ] M0.5 全仓覆盖审计和遗漏补齐。
 
 后续算法任务使用固定 `dev` 分支；每个小任务必须满足：工作树范围清晰、静态检查
@@ -1024,3 +1030,23 @@ M1 应统一受限图搜索与连续性评分、初始化并验证采样契约�
 至此 M0.3c 已完成：SemanticMapManager 从 ROS 输入、感知渲染、语义 Lane/车辆、关键体、
 预测、碰撞、参考 Lane 到可视化的职责链已经建立中文索引；所有发现的逻辑问题仅登记，
 未混入本阶段注释提交，后续统一进入 M1 baseline 修复与回归用例设计。
+
+## 51. M0.4a1：车辆控制器包装层
+
+- `PIDControl` 保存 P/I/D 增益、固定 dt 和最多 1000 个误差历史。每次将
+  `desired-true` 追加到 deque，积分项重新遍历全窗口，历史至少三项时用最近两项做后向
+  差分微分，最后直接返回三项之和；
+- `IntelligentVelocityControl` 每次创建临时 IntelligentDriverModel，写入自车/前车纵向
+  位置速度，把自车负速度截为零，odeint 积分 dt 后再次把输出速度截为非负；
+- `ContextIntelligentVelocityControl` 同样是无状态单步包装，但额外输入目标位置/速度和
+  Context 参数；具体 IDM/上下文融合语义由下层模型决定；
+- `PurePursuitControl` 直接计算 `atan2(2*wheelbase*sin(angle_diff),look_ahead_dist)`，不保存
+  路径或控制历史。
+
+已确认的后续修复/验证点：所有控制器都不检查输出指针、dt、有限性和参数物理范围。
+PID 默认 dt=0.05 s，日志却标为 ms；dt=0 会使微分除零。积分每次 O(N) 重算、无 reset、
+抗饱和或输出限幅，且先用 1001 项积分再弹出最旧项；两项历史时仍不计算可用微分。
+IDM/CTX 包装只截断自车/输出速度，不验证前车/目标速度、位置间距或 Step 结果，模型异常
+仍固定返回成功。Pure Pursuit 不归一化 angle_diff，零/负前视距离仍由 atan2 给出饱和或
+反向几何结果，轴距也可非正。M1 应加入统一 Status/输入契约、PID O(1) 积分与 anti-windup、
+控制限幅和可复现实验参数，并为零速/零前视/异常间距建立边界测试。
