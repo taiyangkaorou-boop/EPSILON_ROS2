@@ -2,52 +2,77 @@ syntax = "proto2";
 
 package planning.ssc;
 
+// SSC 核心规划器的数值切换和目标函数参数。
 message SscPlannerCfg {
+  // 纵向速度下界保护值，避免 Frenet/优化计算落入零速奇异点。
   required double velocity_singularity_eps = 1;
+  // 高于该速度使用 Bezier QP，低于或等于时使用 Frenet primitive。
   required double low_speed_threshold = 2;
+  // QP 目标函数中贴近行为层参考 rollout 的权重。
   required double weight_proximity = 3;
+  // true 时只拟合初始轨迹，不把静态/动态障碍写入 SSC 地图。
   required bool is_fitting_only = 4;
 }
 
+// 单个 DrivingCube 每轮沿六个栅格轴方向尝试的膨胀步数。
 message InflateSteps {
+  // Frenet s 正向和负向膨胀步数。
   required int32 x_p = 1;
   required int32 x_n = 2;
+  // Frenet d 正向和负向膨胀步数。
   required int32 y_p = 3;
   required int32 y_n = 4;
+  // 时间 t 正向和负向膨胀步数；当前主流程未实际使用 z_n。
   required int32 z_p = 5;
   required int32 z_n = 6;
 }
 
+// 写入每个最终时空语义 cube 的统一 Frenet 动力学边界。
 message DynamicBounds {
+  // 纵向速度上下界，单位 m/s。
   required double max_lon_vel = 1;
   required double min_lon_vel = 2;
+  // 纵向最大加速度和负值最大减速度，单位 m/s^2。
   required double max_lon_acc = 3;
   required double max_lon_dec = 4;
+  // 对称横向速度/加速度绝对值上界，单位 m/s 和 m/s^2。
   required double max_lat_vel = 5;
   required double max_lat_acc = 6;
 }
 
+// Frenet `(s,d,t)` 三维占用地图及走廊膨胀参数。
 message SscMapCfg {
+  // 三个维度的栅格数量，依次对应 s、d、t。
   required int32 map_size_x = 1;
   required int32 map_size_y = 2;
   required int32 map_size_z = 3;
 
+  // 三个维度的分辨率，依次为 m、m、s。
   required double map_resl_x = 4;
   required double map_resl_y = 5;
   required double map_resl_z = 6;
 
+  // 地图 s 原点相对规划起点向后的长度，单位 m。
   required double s_back_len = 7;
+  // 走廊连续状态的速度/加速度界。
   required DynamicBounds dyn_bounds = 8;
 
+  // 单个 cube 沿时间正方向最多覆盖的栅格数。
   required int32 max_grids_along_time = 9;
+  // 六方向逐批膨胀步数。
   required InflateSteps infl_steps = 10;
 
 }
 
+// 文本配置根消息；元数据字段不参与当前规划算法。
 message Config {
+  // 配置类型/实例名称。
   required string name = 1;
+  // 配置版本；baseline 文件当前为空字符串。
   required string version = 2;
+  // 配置状态标签；baseline 使用 SET。
   required string status = 3;
+  // 规划器与地图两组必填配置。
   required SscPlannerCfg planner_cfg = 4;
   required SscMapCfg map_cfg = 5;
 }

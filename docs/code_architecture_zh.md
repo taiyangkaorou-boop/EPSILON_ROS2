@@ -110,12 +110,12 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.4a1 车辆模型 PID、IDM/CTX-IDM 速度包装与 Pure Pursuit 控制器。
 - [x] M0.4a2 IDM 与 Context-IDM 连续模型。
 - [x] M0.4a3 VehicleModel 基类与 IdealSteerModel。
-- [ ] M0.4b SSC 地图、规划器、ROS/可视化与配置。
+- [x] M0.4b SSC 地图、规划器、ROS/可视化与配置。
 - [x] M0.4b1 SSC 地图抽象接口与 SemanticMapManager 适配器。
 - [x] M0.4b2 SSC 时空占用栅格与 corridor 地图。
 - [x] M0.4b3 SSC 轨迹规划与优化主流程。
 - [x] M0.4b4 SSC ROS2 服务端与可视化。
-- [ ] M0.4b5 SSC proto、配置、RViz 与构建元数据。
+- [x] M0.4b5 SSC proto、配置、RViz 与构建元数据。
 - [ ] M0.4c 物理仿真器与 arena loader。
 - [ ] M0.4d playground、集成入口、launch 与构建配置。
 - [ ] M0.5 全仓覆盖审计和遗漏补齐。
@@ -1257,3 +1257,46 @@ resolution。占用 GridMap Marker 未显式减 start_time，而 seed/corridor/Q
 状态机、steady/ROS clock 一致调度、输入新鲜度与丢帧统计、轨迹域 clamp 和安全降级；Marker
 应共享稳定 frame/time 变换、稳定 ID、空帧删除和真实地图几何，并补线程销毁、零频率、陈旧
 地图、轨迹边界、重规划失败、空候选及 RViz 残留测试。
+
+## 58. M0.4b5：SSC protobuf、运行参数、RViz 与构建边界
+
+- `ssc_config.proto` 使用 proto2 required 字段。PlannerCfg 定义零速奇异保护、2 m/s 高低速
+  轨迹模式阈值、参考 rollout proximity 权重和 fitting-only 开关；MapCfg 定义 s/d/t 栅格
+  尺寸/分辨率、后向范围、连续动力学界、单 cube 时间跨度和六方向膨胀步数；
+- baseline 文本配置建立 `250×71×41` 栅格，分辨率 `1.0 m/0.2 m/0.2 s`，名义覆盖约
+  250 m×14.2 m×8.2 s，向后保留 20 m。纵向速度界 0--50 m/s、加速度界 -6--3 m/s²，
+  横向速度/加速度绝对界 2.5 m/s 和 1.25 m/s²；单 cube 最多向未来 2 格，每轮 s/d 膨胀
+  5 格、+t/-t 各 1 格，且 `is_fitting_only=false`；
+- CMake 从 schema 在 binary 目录生成 pb.cc/pb.h。`hkust_pl_ssc` 包含地图适配、SscMap、
+  SscPlanner 和生成源码；`ssc_server_ros` 包含服务端/可视化并链接核心库。运行配置安装到
+  `share/ssc_planner/config`，Python launch 正是从该包共享目录读取 `ssc_config.pb.txt`；
+- RViz 配置以 `ssc_map` 为 Fixed/Target Frame，默认订阅 agent_0 的 ego、周车、自车候选、
+  corridor、QP 和 3D GridMap 六个 MarkerArray；semantic voxel display 存在但默认关闭。该文件
+  同时保存 Orbit 相机和本机窗口布局；
+- `package.xml` 声明 ament_cmake、rclcpp/rclpy、common、SemanticMapManager、vehicle_msgs、
+  protobuf 和 glog，并把构建类型导出为 ament_cmake。pb.txt 与 RViz 都是运行时/工具序列化
+  数据，本阶段保持原样；参数职责由 schema 注释和本索引统一说明。
+
+已确认的后续修复/验证点：schema 所有字段虽 required，却没有单位、范围、有限性或跨字段
+约束；C++ 解析只检查 IsInitialized，不防零/负尺寸分辨率、非正膨胀步、颠倒动力学上下界和
+fitting-only 的无障碍风险。name/version/status 不参与算法，baseline version 为空，实验日志
+无法据此唯一追踪配置。名义覆盖按 size×resolution 计算，而 GridMap 有效中心跨度实际是
+`(size-1)×resolution`，实验文档需区分；当前 8 s 时域也未与行为预测/重规划时域建立校验。
+CMake 强制 `CMAKE_BUILD_TYPE=Release` 和全局 `-O3 -Wall`，覆盖用户/多配置生成器选择；设置的
+`${PROJECT_SOURCE_DIR}/cmake` 目录不存在。它使用全局 include_directories、硬编码内部 target
+名和传递依赖，而不是按 target 声明 public/private ament 依赖。最严重的安装错误是公开头
+`ssc_planner.h` 包含生成的 `ssc_config.pb.h`，但安装规则只复制源码 include/，没有安装生成
+头；下游在 install space 可能无法编译。RViz 目录和 proto schema 也未安装。CMake 查找并
+导出 sensor_msgs/OpenMP/visualization_msgs 等，package.xml 却漏掉 visualization_msgs、
+sensor_msgs、OpenMP、tf2、tf2_ros 和 tf2_geometry_msgs；反之 package 声明未使用 rclpy 和
+rosidl_default_runtime。许可证仍是 TODO，版本 0.0.0、maintainer 邮箱也是占位值。Glog/Glog
+包名大小写和 ament export 名称不统一。RViz topic 固定 agent_0，无法直接复用多车 node_id；
+semantic voxel topic 没有对应 publisher，窗口坐标/二进制 QMainWindowState 带机器特定状态，
+配置又未安装，用户不能从 install space 直接加载。M1 应增加结构化 ConfigValidator 和配置
+hash/schema version，改为现代 target-based CMake，安装生成 protobuf 头、schema、config 和
+RViz 资源，补齐 package.xml 依赖/许可证元数据，并为 installed-space 下游 include/link、包
+共享路径、非法参数和多 agent RViz topic 建立静态/ROS2 集成检查。
+
+至此 M0.4b 已完成：SSC 从 SemanticMapManager 数据适配、Frenet 三维占用、DrivingCorridor、
+Bezier/primitive 轨迹、ROS2 双缓冲执行到配置/可视化的完整职责链均已建立中文索引；本阶段
+只登记缺陷，不混入构建或算法修复。
