@@ -95,7 +95,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [ ] M0.3c SemanticMapManager 支撑组件与主类。
 - [x] M0.3c1 SemanticMapManager 基础配置类型与 JSON ConfigLoader。
 - [x] M0.3c2 TrafficSignalManager。
-- [ ] M0.3c3 DataRenderer。
+- [x] M0.3c3 DataRenderer。
 - [ ] M0.3c4 ROS adapter。
 - [ ] M0.3c5 SemanticMapManager visualizer。
 - [ ] M0.3c6 SemanticMapManager 主类分段审计。
@@ -761,3 +761,33 @@ UpdateSignals 会把“尚未开始”的未来信号同过期信号一样永久
 “无约束”哨兵，但调用方必须正确处理。停车状态接口“成功但未赋值”会传播未初始化数据，
 属于 M1 必须优先消除的静态可确认错误。后续应改为不可变信号全集加按时刻查询，接入
 地图/仿真信号源，并统一限速、红灯、停车线的 Lane-aware 时空约束输出。
+
+## 41. M0.3c3：DataRenderer 局部感知与语义地图输入渲染
+
+- 构造函数从绑定 SMM 读取 ego ID、GridMap 元信息和周车搜索半径，以
+  `{height,width}` 和统一 resolution 动态创建工作栅格。每帧 Render 必须先从 VehicleSet
+  取自车，再依次生成障碍图、完整/周边 LaneNet 和周车集合；
+- 局部障碍图以自车为中心计算左下角并把世界坐标取整，先重置 UNKNOWN，再借助 OpenCV
+  把圆形和多边形静态障碍实心填成 OCCUPIED。随后从自车几何中心向八个象限做 FOV
+  ray casting，将可见障碍世界坐标跨帧保存在 `obs_grids_`；
+- FakeMapper 以地图半高度的 80%（即全高度 40%）作为 x/y 共同保留阈值，删除方形
+  范围外历史点，并把
+  剩余点写回新栅格为 SCANNED_OCCUPIED；`free_grids_` 当前未参与建图；
+- 周边 Lane 每帧展平全部 LaneRaw 采样点并重建 KD-tree，半径查询实际覆盖
+  `2*surrounding_search_radius`，命中点按 Lane ID 去重后复制完整 LaneRaw。周车则线性
+  筛选严格小于搜索半径的非 ego 车辆；
+- 跟踪噪声只对 ego 0 生效，每 10 次 Render 打乱周车 ID 并选最多三辆，注入标准差
+  0.2 m 横向、0.7 m 纵向和 0.22 rad 航向高斯噪声；只有航向噪声超过 1.5σ 且非
+  brokencar 才加入 uncertain ID。最终全部派生数据写入 `UpdateSemanticMap`。
+
+已确认的后续修复/验证点：构造函数无空 SMM/配置校验，裸 new 的 GridMap 因空析构而
+泄漏；构造后 setter 只改元信息、不重建栅格。Render 忽略所有子步骤和最终更新错误并
+固定成功，自车 ID 缺失会由 `.at` 抛异常。GridMap 原点只取整到 1 m 而非 resolution，
+矩形地图的 height/width、x/y 半幅和射线半径混用第一维，圆半径截断、退化多边形和越界
+坐标均未校验。历史障碍从不整体清空，按方形而非量测距离衰减，可能产生幽灵障碍和无界
+细粒度坐标集合。Lane KD-tree 每帧全量重建，多个 updated/车辆/障碍 KD-tree 成员完全
+未使用，空 LaneNet 和无效/负 Lane ID 也没有边界处理。周车排除比较 Vehicle 内部 ID 而
+非容器 key。噪声随机引擎使用默认确定性种子；噪声只在第 10 帧实际注入，但 uncertain
+ID 会在其后九帧继续回写，和恢复为无噪声的车辆状态不一致。位置受扰但航向未越阈值的
+车辆又不会标记不确定。M1 应采用 RAII、事务式错误传播、可复用空间索引、带时间戳的
+占据证据衰减，以及显式可复现实验 seed/噪声持续模型。
