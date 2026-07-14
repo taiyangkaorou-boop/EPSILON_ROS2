@@ -1,9 +1,15 @@
+/**
+ * @file eudm_manager.cc
+ * @brief EUDM 跨周期动作续接、HMI 换道状态机、候选重选与快照输出实现。
+ */
+
 #include "eudm_planner/eudm_manager.h"
 
 #include <glog/logging.h>
 
 namespace planning {
 
+// 初始化 glog、内部 planner、地图适配器绑定和 manager 工作频率。
 void EudmManager::Init(const std::string& config_path,
                        const decimal_t work_rate) {
   google::InitGoogleLogging("eudm");
@@ -22,27 +28,25 @@ void EudmManager::Init(const std::string& config_path,
   }
 }
 
+// 将 stamp+delta 按 DCP layer 时长向上对齐到最近未来决策点。
 decimal_t EudmManager::GetNearestFutureDecisionPoint(const decimal_t& stamp,
-                                                     const decimal_t& delta) {
-  // consider the nearest decision point (rounded by layer time)
-  // w.r.t stamp + delta
+                                                      const decimal_t& delta) {
+  // 先向下取整到历史决策点，再前移一个 layer。
   decimal_t past_decision_point =
       std::floor((stamp + delta) / bp_.cfg().sim().duration().layer()) *
       bp_.cfg().sim().duration().layer();
   return past_decision_point + bp_.cfg().sim().duration().layer();
 }
 
+// 判断当前规划结果是否为指定换道方向提供足够多的低风险候选。
 bool EudmManager::IsTriggerAppropriate(const LateralBehavior& lat) {
 #if 1
+  // 当前编译期开关永久绕过下方检查，所有时刻都被视为适合触发。
   return true;
 #endif
-  // check whether appropriate to conduct lat behavior right now,
-  // if not, recommend a velocity instead.
+  // 设计意图：统计未来第 1~3 层内可安全执行目标换道的候选数量。
   if (!last_snapshot_.valid) return false;
-  // KXXXX
-  // KKXXX
-  // KKKLL
-  // KKKKL
+  // 示例模式：KXXXX、KKXXX、KKKLL、KKKKL。
   const int kMinActionCheckIdx = 1;
   const int kMaxActionCheckIdx = 3;
   const int kMinMatchSeqs = 3;
@@ -72,12 +76,15 @@ bool EudmManager::IsTriggerAppropriate(const LateralBehavior& lat) {
   return true;
 }
 
+// 准备本周期地图、ongoing action、换道上下文、参考速度和 planner 输入。
 ErrorType EudmManager::Prepare(
     const decimal_t stamp,
     const std::shared_ptr<semantic_map_manager::SemanticMapManager>& map_ptr,
-    const planning::eudm::Task& task) {
+      const planning::eudm::Task& task) {
+  // 每周期替换语义地图快照；当前 set_map 不拒绝空指针。
   map_adapter_.set_map(map_ptr);
 
+  // 优先从上一最终脚本恢复 ongoing action，否则从下一决策点开始保持。
   DcpAction desired_action;
   if (!GetReplanDesiredAction(stamp, &desired_action)) {
     desired_action.lat = DcpLatAction::kLaneKeeping;
@@ -86,15 +93,18 @@ ErrorType EudmManager::Prepare(
     desired_action.t = fdp_stamp - stamp;
   }
 
+  // manager 直接访问底层地图扩展接口获取自车最近 Lane。
   if (map_adapter_.map()->GetEgoNearestLaneId(&ego_lane_id_) != kSuccess) {
     return kWrongStatus;
   }
 
+  // 推进 HMI 状态机；任务已完成时强制 ongoing 横向动作为 LK。
   UpdateLaneChangeContextByTask(stamp, task);
   if (lc_context_.completed) {
     desired_action.lat = DcpLatAction::kLaneKeeping;
   }
 
+  // 输出动作续接和换道状态，便于逐周期复现状态机转移。
   {
     std::ostringstream line_info;
     line_info << "[Eudm][Manager]Replan context <valid, stamp, seq>:<"
@@ -124,6 +134,7 @@ ErrorType EudmManager::Prepare(
     LOG(WARNING) << line_info.str();
   }
 
+  // 用 ongoing action 重建 DCP tree，并根据上一参考 Lane 计算本周期速度上限。
   bp_.UpdateDcpTree(desired_action);
   decimal_t ref_vel;
   EvaluateReferenceVelocity(task, &ref_vel);
@@ -132,14 +143,11 @@ ErrorType EudmManager::Prepare(
   bp_.set_desired_velocity(ref_vel);
 
   auto lc_info = task.lc_info;
-  // augment lc info with lane context information
+  // 达到计划操作时刻后，把当前换道上下文转换为 planner 推荐方向。
   if (!lc_context_.completed) {
     if (stamp >= lc_context_.desired_operation_time) {
       if (lc_context_.lat == LateralBehavior::kLaneChangeLeft) {
-        // LOG(WARNING) << std::fixed << std::setprecision(5)
-        //              << "[HMI]Recommending left at " << stamp
-        //              << " with desired time: "
-        //              << lc_context_.desired_operation_time;
+        // 计划时刻到达后向 planner 推荐左换道。
         lc_info.recommend_lc_left = true;
       } else if (lc_context_.lat == LateralBehavior::kLaneChangeRight) {
         lc_info.recommend_lc_right = true;
@@ -156,6 +164,7 @@ ErrorType EudmManager::Prepare(
   return kSuccess;
 }
 
+// 从原始 winner 连续多帧积累一致请求，并生成下一周期可消费的主动换道提案。
 ErrorType EudmManager::GenerateLaneChangeProposal(
     const decimal_t& stamp, const planning::eudm::Task& task) {
   if (!bp_.cfg().function().active_lc_enable()) {
@@ -166,6 +175,7 @@ ErrorType EudmManager::GenerateLaneChangeProposal(
     return kSuccess;
   }
 
+  // 只有 active LC 开启、自动控制中、当前无换道且拨杆复位时才积累请求。
   if (!task.is_under_ctrl) {
     preliminary_active_requests_.clear();
     LOG(WARNING) << std::fixed << std::setprecision(5)
@@ -182,7 +192,7 @@ ErrorType EudmManager::GenerateLaneChangeProposal(
     return kSuccess;
   }
 
-  // if stick not reset, will not try active lane change
+  // 拨杆未复位时不尝试主动换道，避免和人工 stick 请求竞争。
   if (lc_context_.completed && task.user_perferred_behavior != 0) {
     preliminary_active_requests_.clear();
     LOG(WARNING) << std::fixed << std::setprecision(5)
@@ -191,6 +201,7 @@ ErrorType EudmManager::GenerateLaneChangeProposal(
     return kSuccess;
   }
 
+  // 时间戳回退时重置提案和请求队列。
   if (stamp - last_lc_proposal_.trigger_time < 0.0) {
     last_lc_proposal_.valid = false;
     last_lc_proposal_.trigger_time = stamp;
@@ -203,6 +214,7 @@ ErrorType EudmManager::GenerateLaneChangeProposal(
     return kSuccess;
   }
 
+  // 提案触发后进入冷却期，期间不继续积累。
   if (stamp - last_lc_proposal_.trigger_time <
       bp_.cfg().function().active_lc().cold_duration()) {
     preliminary_active_requests_.clear();
@@ -213,6 +225,7 @@ ErrorType EudmManager::GenerateLaneChangeProposal(
     return kSuccess;
   }
 
+  // 只有上一规划状态速度落在配置窗口内才允许主动换道。
   if (last_snapshot_.plan_state.velocity <
           bp_.cfg().function().active_lc().activate_speed_lower_bound() ||
       last_snapshot_.plan_state.velocity >
@@ -224,6 +237,7 @@ ErrorType EudmManager::GenerateLaneChangeProposal(
     return kSuccess;
   }
 
+  // 可选：新出现的方向禁换信号立即清空同方向积累。
   if (bp_.cfg()
           .function()
           .active_lc()
@@ -248,6 +262,7 @@ ErrorType EudmManager::GenerateLaneChangeProposal(
     }
   }
 
+  // 从原始最低代价脚本提取换道方向和相对操作时刻。
   common::LateralBehavior lat_behavior;
   decimal_t operation_at_seconds;
   bool is_cancel_behavior;
@@ -262,6 +277,7 @@ ErrorType EudmManager::GenerateLaneChangeProposal(
     return kSuccess;
   }
 
+  // 本帧请求保存绝对期望操作时间，便于跨帧比较一致性。
   ActivateLaneChangeRequest this_request;
   this_request.trigger_time = stamp;
   this_request.desired_operation_time = stamp + operation_at_seconds;
@@ -274,7 +290,7 @@ ErrorType EudmManager::GenerateLaneChangeProposal(
                  << " Init requesting "
                  << common::SemanticsUtils::RetLatBehaviorName(this_request.lat)
                  << " at " << this_request.desired_operation_time
-                 << " with lane id " << this_request.ego_lane_id;
+                  << " with lane id " << this_request.ego_lane_id;
   } else {
     LOG(WARNING) << std::fixed << std::setprecision(5)
                  << "[Eudm][ActiveLc]trigger time:" << this_request.trigger_time
@@ -283,6 +299,7 @@ ErrorType EudmManager::GenerateLaneChangeProposal(
                  << " at " << this_request.desired_operation_time
                  << " with lane id " << this_request.ego_lane_id;
     auto last_request = preliminary_active_requests_.back();
+    // Lane、方向或计划操作时刻变化超过阈值时，整段积累重新开始。
     if (last_request.ego_lane_id != this_request.ego_lane_id) {
       LOG(WARNING)
           << "[Eudm][ActiveLc]Invalid this request due to lane id inconsitent.";
@@ -309,6 +326,7 @@ ErrorType EudmManager::GenerateLaneChangeProposal(
                  << operation_at_seconds;
   }
 
+  // 连续帧数达到阈值且操作延迟足够短时，生成一次性 proposal。
   if (preliminary_active_requests_.size() >=
       bp_.cfg().function().active_lc().consistent_min_num_frame()) {
     if (operation_at_seconds <
@@ -316,6 +334,7 @@ ErrorType EudmManager::GenerateLaneChangeProposal(
             kEPS) {
       last_lc_proposal_.valid = true;
       last_lc_proposal_.trigger_time = stamp;
+      // 过近的操作时刻向上对齐到满足最小延迟的未来决策点。
       last_lc_proposal_.operation_at_seconds =
           operation_at_seconds > bp_.cfg()
                                      .function()
@@ -339,15 +358,17 @@ ErrorType EudmManager::GenerateLaneChangeProposal(
                    << last_lc_proposal_.operation_at_seconds;
     } else {
       preliminary_active_requests_.clear();
-      // LOG(WARNING) << "[HMI]Abandan Queue due to change time not legal.";
+      // 操作时刻过远时放弃整段积累。
     }
   }
 
   return kSuccess;
 }
 
+// 根据控制权、拨杆、禁换信号、超时和主动提案推进换道状态机。
 void EudmManager::UpdateLaneChangeContextByTask(
     const decimal_t stamp, const planning::eudm::Task& task) {
+  // 自动控制权任一方向切换都终止当前换道并重置提案冷却起点。
   if (!last_task_.is_under_ctrl && task.is_under_ctrl) {
     LOG(WARNING) << "[HMI]Autonomous mode activated!";
     lc_context_.completed = true;
@@ -362,6 +383,7 @@ void EudmManager::UpdateLaneChangeContextByTask(
     last_lc_proposal_.trigger_time = stamp;
   }
 
+  // 记录拨杆和左右禁换信号变化，供状态机诊断。
   if (task.user_perferred_behavior != last_task_.user_perferred_behavior) {
     LOG(WARNING) << "[HMI]stick state change from "
                  << last_task_.user_perferred_behavior << " to "
@@ -377,11 +399,12 @@ void EudmManager::UpdateLaneChangeContextByTask(
                  << task.lc_info.forbid_lane_change_right;
   }
 
+  // 只有自动控制开启时才接受/推进换道任务。
   if (task.is_under_ctrl) {
     if (!lc_context_.completed) {
+      // 自车不再与触发 Lane 连续时，把换道视为已完成。
       if (!map_adapter_.IsLaneConsistent(lc_context_.ego_lane_id,
                                          ego_lane_id_)) {
-        // in progress lane change and lane id change
         LOG(WARNING) << "[HMI]lane change completed due to different lane id "
                      << lc_context_.ego_lane_id << " to " << ego_lane_id_
                      << ". Cd alc.";
@@ -389,9 +412,9 @@ void EudmManager::UpdateLaneChangeContextByTask(
         lc_context_.trigger_when_appropriate = false;
         last_lc_proposal_.trigger_time = stamp;
       } else {
+        // 进行中的 stick 换道在拨杆离开原方向时立即取消。
         if (task.user_perferred_behavior != 1 &&
             last_task_.user_perferred_behavior == 1) {
-          // receive a lane cancel trigger
           LOG(WARNING) << "[HMI]lane change cancel by stick "
                        << last_task_.user_perferred_behavior << " to "
                        << task.user_perferred_behavior << ". Cd alc.";
@@ -400,7 +423,6 @@ void EudmManager::UpdateLaneChangeContextByTask(
           last_lc_proposal_.trigger_time = stamp;
         } else if (task.user_perferred_behavior != -1 &&
                    last_task_.user_perferred_behavior == -1) {
-          // receive a lane cancel trigger
           LOG(WARNING) << "[HMI]lane change cancel by stick "
                        << last_task_.user_perferred_behavior << " to "
                        << task.user_perferred_behavior << ". Cd alc.";
@@ -408,6 +430,7 @@ void EudmManager::UpdateLaneChangeContextByTask(
           lc_context_.trigger_when_appropriate = false;
           last_lc_proposal_.trigger_time = stamp;
         } else if (lc_context_.type == LaneChangeTriggerType::kActive) {
+          // 主动换道可按过期、方向禁换或人工相反信号自动取消。
           if (bp_.cfg()
                   .function()
                   .active_lc()
@@ -483,8 +506,7 @@ void EudmManager::UpdateLaneChangeContextByTask(
         }
       }
     } else {
-      // lane change completed state: welcome new activations
-      // handle user requirement first
+      // 空闲状态先处理缓存 stick 的复位，再接受新的人工或主动请求。
       if (task.user_perferred_behavior != 1 &&
           last_task_.user_perferred_behavior == 1 &&
           lc_context_.trigger_when_appropriate) {
@@ -501,8 +523,7 @@ void EudmManager::UpdateLaneChangeContextByTask(
 
       if (task.user_perferred_behavior == 1 &&
           last_task_.user_perferred_behavior != 1) {
-        // receive a lane change right trigger and previous action has been
-        // completed
+        // 新的右拨杆：禁换时缓存，否则在合适时刻建立 stick 上下文。
         if (task.lc_info.forbid_lane_change_right) {
           LOG(WARNING)
               << "[HMI]cannot stick [Right]. Will trigger when appropriate.";
@@ -541,6 +562,7 @@ void EudmManager::UpdateLaneChangeContextByTask(
         }
       } else if (task.user_perferred_behavior == -1 &&
                  last_task_.user_perferred_behavior != -1) {
+        // 新的左拨杆使用与右侧对称的触发/缓存逻辑。
         if (task.lc_info.forbid_lane_change_left) {
           LOG(WARNING)
               << "[HMI]cannot stick [Left]. Will trigger when appropriate.";
@@ -578,6 +600,7 @@ void EudmManager::UpdateLaneChangeContextByTask(
           }
         }
       } else if (lc_context_.trigger_when_appropriate) {
+        // 已缓存的 stick 请求在禁换解除且触发条件满足后自动激活。
         if (lc_context_.lat == LateralBehavior::kLaneChangeLeft &&
             !task.lc_info.forbid_lane_change_left) {
           if (IsTriggerAppropriate(LateralBehavior::kLaneChangeLeft)) {
@@ -618,6 +641,7 @@ void EudmManager::UpdateLaneChangeContextByTask(
           }
         }
       } else {
+        // 没有人工/缓存请求时，消费上一周期生成且方向未被禁用的主动提案。
         if (last_lc_proposal_.valid &&
             map_adapter_.IsLaneConsistent(last_lc_proposal_.ego_lane_id,
                                           ego_lane_id_) &&
@@ -656,13 +680,14 @@ void EudmManager::UpdateLaneChangeContextByTask(
         }
       }
     }
-  }  // if under control
+  }  // 自动控制开启。
 
-  // any proposal will not last for more than one cycle
+  // proposal 最多存活一个 Prepare 周期；保存 task 供下周期边沿检测。
   last_lc_proposal_.valid = false;
   last_task_ = task;
-}  // namespace planning
+}
 
+// 将 planner 本周期全部结果深拷贝到 manager 快照。
 void EudmManager::SaveSnapshot(Snapshot* snapshot) {
   snapshot->valid = true;
   snapshot->plan_state = bp_.plan_state();
@@ -684,7 +709,9 @@ void EudmManager::SaveSnapshot(Snapshot* snapshot) {
   snapshot->time_cost = bp_.time_cost();
 }
 
+// 从 processed winner 构造下游只包含一条候选的 SemanticBehavior。
 void EudmManager::ConstructBehavior(common::SemanticBehavior* behavior) {
+  // 无成功快照时保持调用方 behavior 原值。
   if (not last_snapshot_.valid) return;
   int selected_seq_id = last_snapshot_.processed_winner_id;
   vec_E<std::unordered_map<int, vec_E<common::Vehicle>>> surround_trajs_final;
@@ -703,9 +730,11 @@ void EudmManager::ConstructBehavior(common::SemanticBehavior* behavior) {
   behavior->ref_lane = last_snapshot_.ref_lane;
 }
 
+// 用上一成功参考 Lane 的前向曲率限制用户期望速度。
 ErrorType EudmManager::EvaluateReferenceVelocity(
     const planning::eudm::Task& task, decimal_t* ref_vel) {
   if (!last_snapshot_.ref_lane.IsValid()) {
+    // 首周期或无参考 Lane 时直接采用用户速度。
     *ref_vel = task.user_desired_vel;
     return kSuccess;
   }
@@ -717,6 +746,7 @@ ErrorType EudmManager::EvaluateReferenceVelocity(
   decimal_t v_max_by_curvature;
   decimal_t v_ref = kInf;
 
+  // 以前一规划速度和舒适制动估计前视时间/距离，最少检查 20 m。
   decimal_t a_comfort = bp_.cfg().sim().ego().lon().limit().soft_brake();
   decimal_t t_forward = last_snapshot_.plan_state.velocity / a_comfort;
   decimal_t s_forward =
@@ -724,6 +754,7 @@ ErrorType EudmManager::EvaluateReferenceVelocity(
                last_snapshot_.ref_lane.end());
   decimal_t resolution = 0.2;
 
+  // 每 0.2 m 用横向加速度上限反推曲率速度上限并取最小值。
   for (decimal_t s = current_fs.vec_s[0]; s < current_fs.vec_s[0] + s_forward;
        s += resolution) {
     if (last_snapshot_.ref_lane.GetCurvatureByArcLength(s, &c, &cc) ==
@@ -734,6 +765,7 @@ ErrorType EudmManager::EvaluateReferenceVelocity(
     }
   }
 
+  // 结果截断到 [0, user_desired_vel] 并向下取整为整数速度。
   *ref_vel = std::floor(std::min(std::max(v_ref, 0.0), task.user_desired_vel));
 
   LOG(WARNING) << "[Eudm][Desired]User ref vel: " << task.user_desired_vel
@@ -741,10 +773,10 @@ ErrorType EudmManager::EvaluateReferenceVelocity(
   return kSuccess;
 }
 
+// 在符合当前换道上下文的成功候选中重选最低 final_cost。
 ErrorType EudmManager::ReselectByContext(const decimal_t stamp,
                                          const Snapshot& snapshot,
                                          int* new_seq_id) {
-  // *new_seq_id = snapshot.original_winner_id;
   int selected_seq_id;
   int num_seqs = snapshot.action_script.size();
   bool find_match = false;
@@ -758,6 +790,7 @@ ErrorType EudmManager::ReselectByContext(const decimal_t stamp,
     bp_.ClassifyActionSeq(snapshot.action_script[i], &operation_at_seconds,
                           &lat_behavior, &is_cancel_behavior);
 
+    // 空闲/计划时刻前只允许 LK；到达时刻后允许目标方向或继续 LK。
     if ((lc_context_.completed &&
          lat_behavior == common::LateralBehavior::kLaneKeeping) ||
         (!lc_context_.completed && stamp < lc_context_.desired_operation_time &&
@@ -781,6 +814,7 @@ ErrorType EudmManager::ReselectByContext(const decimal_t stamp,
   return kSuccess;
 }
 
+// 执行 manager 完整周期并在所有阶段成功后更新快照、提案和动作续接上下文。
 ErrorType EudmManager::Run(
     const decimal_t stamp,
     const std::shared_ptr<semantic_map_manager::SemanticMapManager>& map_ptr,
@@ -791,7 +825,7 @@ ErrorType EudmManager::Run(
   static TicToc eudm_timer;
   eudm_timer.tic();
 
-  // * I : Prepare
+  // I. 准备地图、任务、ongoing action 和 planner 输入。
   static TicToc prepare_timer;
   prepare_timer.tic();
   if (Prepare(stamp, map_ptr, task) != kSuccess) {
@@ -801,7 +835,7 @@ ErrorType EudmManager::Run(
   LOG(WARNING) << std::fixed << std::setprecision(4)
                << "[Eudm]Prepare time cost " << t_prepare << " ms";
 
-  // * II : RunOnce
+  // II. 运行底层 EUDM 候选仿真与原始 winner 选择。
   static TicToc runonce_timer;
   runonce_timer.tic();
   if (bp_.RunOnce() != kSuccess) {
@@ -814,10 +848,10 @@ ErrorType EudmManager::Run(
 
   static TicToc sum_reselect_timer;
   sum_reselect_timer.tic();
-  // * III: Summarize
+  // III. 深拷贝底层结果到临时快照。
   Snapshot snapshot;
   SaveSnapshot(&snapshot);
-  // * IV: Reselect
+  // IV. 按当前换道任务约束重选最终候选。
   if (ReselectByContext(stamp, snapshot, &snapshot.processed_winner_id) !=
       kSuccess) {
     LOG(WARNING) << "[Eudm][Fatal]Reselect failed.";
@@ -851,6 +885,7 @@ ErrorType EudmManager::Run(
 
   static TicToc lane_timer;
   lane_timer.tic();
+  // 为最终候选首层横向行为拟合长 250 m/后 20 m 的高质量参考 Lane。
   if (map_adapter_.map()->GetRefLaneForStateByBehavior(
           snapshot.plan_state, std::vector<int>(),
           snapshot.forward_lat_behaviors[snapshot.processed_winner_id].front(),
@@ -858,9 +893,10 @@ ErrorType EudmManager::Run(
     return kWrongStatus;
   }
 
+  // 只有参考 Lane 成功后才发布新快照，并基于原始 winner 生成主动提案。
   last_snapshot_ = snapshot;
   GenerateLaneChangeProposal(stamp, task);
-  // * V: Update
+  // V. 保存最终脚本起点，供下一周期恢复 ongoing action。
   context_.is_valid = true;
   context_.seq_start_time = stamp;
   context_.action_seq = snapshot.action_script[snapshot.processed_winner_id];
@@ -878,6 +914,7 @@ ErrorType EudmManager::Run(
   return kSuccess;
 }
 
+// 根据当前时间定位上次脚本仍在执行的动作，并返回其剩余时长。
 bool EudmManager::GetReplanDesiredAction(const decimal_t current_time,
                                          DcpAction* desired_action) {
   if (!context_.is_valid) return false;
@@ -886,6 +923,7 @@ bool EudmManager::GetReplanDesiredAction(const decimal_t current_time,
   decimal_t t_aggre = 0.0;
   bool find_match_action = false;
   int action_seq_len = context_.action_seq.size();
+  // 累计层时长，找到第一个结束时间晚于当前相对时间的动作。
   for (int i = 0; i < action_seq_len; ++i) {
     t_aggre += context_.action_seq[i].t;
     if (time_since_last_plan + kEPS < t_aggre) {
@@ -901,8 +939,10 @@ bool EudmManager::GetReplanDesiredAction(const decimal_t current_time,
   return true;
 }
 
+// 仅禁用动作续接上下文。
 void EudmManager::Reset() { context_.is_valid = false; }
 
+// 返回内部 planner 可变引用，供 server/visualizer 读取诊断。
 EudmPlanner& EudmManager::planner() { return bp_; }
 
 }  // namespace planning

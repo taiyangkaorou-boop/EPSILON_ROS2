@@ -136,7 +136,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.5a3d EUDM 代价、RSS 与严格安全评价。
 - [ ] M0.5a4 EUDM manager、ROS server 与 visualizer。
 - [x] M0.5a4a EUDM manager 公共状态、快照与所有权。
-- [ ] M0.5a4b EUDM manager 动作续接、HMI 状态机与重选实现。
+- [x] M0.5a4b EUDM manager 动作续接、HMI 状态机与重选实现。
 - [ ] M0.5a4c EUDM ROS2 server 与 visualizer。
 - [ ] M0.5a5 EUDM proto、CMake 与 package 元数据。
 - [ ] M0.5b ai_agent planner 与 launch/build。
@@ -1767,3 +1767,37 @@ Manager 没有显式 initialized/last-run-success 状态，也没有线程安全
 裸指针。M1 应给所有状态确定默认值，采用 generation/epoch 区分新旧场景，Reset 做完整状态复位，
 只暴露 const 快照/受控命令接口，并用 move/共享只读轨迹降低复制；测试应覆盖默认构造 getter、
 Run 前 ConstructBehavior、Reset 后重新接管、场景时间回退、连续失败、并发可视化读取和大快照峰值。
+
+## 73. M0.5a4b：EUDM manager 动作续接、HMI 状态机与候选重选
+
+- Init 配置 glog、初始化 planner 并把其 map interface 指向 manager 内部 adapter；Prepare 每周期
+  替换 SemanticMapManager，从上一最终脚本按经过时间恢复 ongoing action，更新自车 Lane/HMI，
+  重建 DCP tree，并用上一参考 Lane 曲率限制本周期用户期望速度；
+- stick 换道由 user_perferred_behavior 的边沿触发：禁换或时机不合适时缓存，条件解除后激活；
+  active 换道从原始 winner 的首次换道方向/时刻生成请求，要求连续多帧 Lane、方向和绝对操作时刻
+  一致，满足帧数、速度、冷却和最大延迟后生成仅存活一个周期的 proposal；
+- 进行中的换道在 Lane 不再连续时完成；stick 可由拨杆复位取消，active 可由过期、禁换或人工相反
+  信号取消。到达 desired_operation_time 后 manager 把上下文方向写为 planner recommendation；
+- SaveSnapshot 深拷贝 planner 结果；ReselectByContext 在成功候选中按换道上下文筛选：空闲/计划时刻
+  前只允许 LK，计划时刻后允许目标方向或 LK，再取最低 final_cost；Run 最后为 processed winner
+  拟合高质量参考 Lane、发布快照、生成主动提案并保存脚本起点；
+- EvaluateReferenceVelocity 以前一参考 Lane 每 0.2 m 采样曲率，用横向加速度上限计算最小曲率限速，
+  再截断到用户速度并 floor；GetReplanDesiredAction 用累计动作时长返回当前动作的剩余时间。
+
+已确认的后续修复/验证点：IsTriggerAppropriate 被 `#if 1` 固定返回 true，实际安全时机检查完全失效；
+若恢复死代码，它固定访问动作索引 1..3 且不检查脚本/结果数组长度，H<4 会越界。Init 忽略 planner
+Init 失败，重复初始化全局 glog，work_rate_ 在 manager 内保存但从不使用；GetNearestFutureDecisionPoint
+在 layer=0 时除零。Prepare 不检查 map_ptr，直接 map()->GetEgoNearestLaneId；参考速度仍依赖上一周期
+快照，首周期仅回退用户速度。HMI 用 0/1/-1/11/12 魔法整数和多个 bool 表达状态，配置还保留
+enable_auto_canbel 拼写；互斥性和转移合法性没有集中校验。Lane 完成判断依赖有界 child BFS，长分叉
+可假阴性并提前结束换道。主动提案基于 original winner 而最终执行 processed winner，二者方向/时刻
+可能不一致；GenerateLaneChangeProposal、ClassifyActionSeq 的返回值和数组索引均未检查。
+EvaluateReferenceVelocity 不检查 Frenet 投影，soft_brake=0 会除零，曲率 0/NaN 和负横向加速度可产生
+inf/NaN；前视上界使用 lane.end() 而非剩余长度，循环可能查询 Lane 终点外，最终 floor 还造成 1 m/s
+量化。Reselect 不排除 risky_res，只依赖 RSS 软代价；无匹配时整周期失败。ConstructBehavior 只检查
+snapshot.valid，不检查 processed ID、轨迹/行为非空，front()/[] 可崩溃；无快照时也不清调用方旧行为。
+Run 任一阶段失败都保留上一 last_snapshot/context，若上层忽略返回码会继续发布旧规划；最终参考 Lane
+前后 250/20 m 硬编码，GenerateProposal 返回值被忽略。Reset 仅清动作续接。M1 应把 HMI 改为显式
+variant/状态转移表，恢复并重写安全触发判定，统一新鲜度 epoch 和 fail-closed 输出，建立曲率限速
+数值守卫、快照边界验证和 full Reset；测试覆盖 H=1/2/3、零 layer/work rate、null map、模式切换、
+拨杆抖动/相反信号、提案与重选分歧、长 Lane 分叉、NaN 曲率、空候选和各阶段连续失败。
