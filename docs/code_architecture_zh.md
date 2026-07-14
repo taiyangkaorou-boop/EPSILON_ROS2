@@ -97,7 +97,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.3c2 TrafficSignalManager。
 - [x] M0.3c3 DataRenderer。
 - [x] M0.3c4 ROS adapter。
-- [ ] M0.3c5 SemanticMapManager visualizer。
+- [x] M0.3c5 SemanticMapManager visualizer。
 - [ ] M0.3c6 SemanticMapManager 主类分段审计。
 - [ ] M0.4 SSC、车辆模型、物理仿真、playground 与配置。
 - [ ] M0.5 全仓覆盖审计和遗漏补齐。
@@ -815,3 +815,31 @@ Init 既在构造中调用又保持 public，重复调用会重复创建订阅�
 同一缓存。空回调可被标记为已绑定，回调执行时间直接阻塞订阅处理。M1 应采用 unique_ptr、
 不可复制语义、显式输入模式、callback group/锁或消息快照，以及带时间同步和错误状态的
 单一渲染触发入口。
+
+## 43. M0.3c5：SemanticMapManager 多图层 ROS2 可视化
+
+- 每个 Visualizer 构造九个 `/vis/agent_<id>/...` 深度 1 publisher，覆盖自车、OccupancyGrid、
+  原始/本地 Lane、SemanticBehavior、开环轨迹、意图概率、周车和限速；另准备 ego TF；
+- 实时入口要求 SMM 时间戳大于 kEPS，用它构造 ROS Time，依次发布九个图层后发送
+  `map -> ego_vehicle_vis_<id>` TF。显式时间戳入口不发送 TF；播放入口额外把删除 Lane ID
+  传给原始/本地 Lane 过滤；
+- 周车和自车复用通用车辆 Marker，brokencar 单独着色，key 车辆提高 alpha。原始 Lane
+  每条发布中心线、首尾球和 ID 文本四个 Marker；本地 Lane 发布半透明洋红面片；
+- 行为层直接可视化 SemanticBehavior。意图层在车辆上方用长度 `2*prob` 的黄色箭头表示
+  LK/LCL/LCR；开环轨迹用逐状态圆柱加折线。限速每段用起终点六边形和文本四个 Marker，
+  最大速度近零时显示 Red light/Forbidden；
+- 除自车和 OccupancyGrid 外，变长 MarkerArray 大都记录上一帧 ADD 数量，并通过统一工具
+  追加 DELETE Marker 清理残留 ID。
+
+已确认的后续修复/验证点：构造函数不检查 node，topic/frame/颜色/尺度全部硬编码且创建
+大量 publisher。实时入口 `rclcpp::Time(smm.time_stamp())` 把 double 秒传给以纳秒为核心的
+构造接口，存在严重时间单位错误；各 SMM getter 又可能深拷贝大对象。TF 函数不使用已构造
+的成员 broadcaster，而使用绑定首个实例 node 的函数静态 broadcaster，多 ego/生命周期
+语义错误。局部 Lane 删除计数也是函数 static，所有 Visualizer 实例共享。原始 Lane 直接
+解引用首尾采样，空 lane_points 会崩溃；删除列表和 key ID 均为嵌套线性查找。意图概率和
+开环轨迹来自无序容器，Marker ID 会随遍历顺序漂移；Undefined 行为会沿 LK 方向显示，
+概率不校验 [0,1]，ARROW 的 scale.z 未设置。开环与 Behavior 图层按每个状态生成 Marker，
+带宽/CPU 随车辆×模态×时域增长，空轨迹仍生成空折线。限速把零速度编码为红灯，忽略
+最小速度/有效时间，offset 恒零。Marker 工具返回码、publisher 状态和颜色键异常均未处理，
+marker_lifetime_ 未使用。M1 应先修复时间/静态状态问题，再做稳定 namespace+语义 ID、
+可配置图层、轨迹抽样和行为/风险分色。
