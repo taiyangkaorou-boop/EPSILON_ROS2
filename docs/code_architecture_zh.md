@@ -117,6 +117,9 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.4b4 SSC ROS2 服务端与可视化。
 - [x] M0.4b5 SSC proto、配置、RViz 与构建元数据。
 - [ ] M0.4c 物理仿真器与 arena loader。
+- [x] M0.4c1 场景基础依赖与 ArenaLoader。
+- [ ] M0.4c2 PhySimulation 状态推进与临时障碍物。
+- [ ] M0.4c3 ROS2 adapter、visualizer 与仿真节点。
 - [ ] M0.4d playground、集成入口、launch 与构建配置。
 - [ ] M0.5 全仓覆盖审计和遗漏补齐。
 
@@ -1300,3 +1303,33 @@ RViz 资源，补齐 package.xml 依赖/许可证元数据，并为 installed-sp
 至此 M0.4b 已完成：SSC 从 SemanticMapManager 数据适配、Frenet 三维占用、DrivingCorridor、
 Bezier/primitive 轨迹、ROS2 双缓冲执行到配置/可视化的完整职责链均已建立中文索引；本阶段
 只登记缺陷，不混入构建或算法修复。
+
+## 59. M0.4c1：playground 场景 JSON/GeoJSON 加载
+
+- `phy_simulator/basics.h` 当前只是 common/Eigen 类型的集中依赖入口，没有定义模块自有类型；
+- ArenaLoader 保存 vehicle_set、obstacle map 和 LaneNet 三个路径。VehicleSet 解析遍历
+  `vehicles.info`，读取 ID/subclass/type、初始 x/y/yaw/curvature/velocity/acceleration/steer，
+  以及车宽、车长、轴距、前后悬、最大转角和纵横向加速度；最大转角由 degree 转 rad，
+  `d_cr=length/2-rear_suspension`；
+- 障碍地图按 GeoJSON FeatureCollection 读取，只保留 is_valid 非零 Feature；ID/is_spec 写入
+  PolygonObstacle，几何从 MultiPolygon `coordinates[0][0]` 取得首个 polygon 外环；
+- LaneNet 同样遍历 FeatureCollection。ID/length 来自 properties，dir 固定为 1；child/father
+  是逗号分隔字符串，解析后排除 ID 0；left/right ID、换道可用性和 behavior 原样保存；中心线
+  只读取 MultiLineString 第一条坐标序列，并以首末样本设置 start/final point；
+- 三类结果都用 map insert 按 ID 写入调用者容器，完成后调用 print 输出整个集合。
+
+已确认的后续修复/验证点：默认构造路径为空，三个 Parse 都不检查输出指针、路径、fstream
+open/read 状态、JSON parse 异常、schema、类型、有限性或物理范围；缺字段/类型错误会由
+nlohmann::json 或 stoi 抛异常，接口没有 catch。VehicleSet 返回 bool，另外两个返回 ErrorType，
+但成功/失败契约不统一且当前除异常外始终报告成功；顶层 vehicles.num 被忽略。输出容器不先
+清空，insert 遇重复 ID 又不覆盖，重复调用可能混合旧场景并静默保留旧对象。State 时间戳
+没有场景字段，车辆 subclass/type 和参数组合不验证，负尺寸/轴距/加速度仍可进入仿真。
+GeoJSON CRS/type/name 被忽略；障碍只支持首个 MultiPolygon 外环，丢弃其它 polygon、内洞和
+非 MultiPolygon geometry，闭合重复端点原样保留，也不验证最少顶点、自交或 orientation。
+Lane 只支持首条 MultiLineString；metadata length 不与几何重算，dir 强制 1，behavior 是未验证
+自由字符串。空 child/father token 会 stoi 失败，合法 Lane ID 0 被当哨兵丢弃；左右/父子 ID
+存在性、互反性和换道一致性都不检查。空中心线会在 begin/rbegin 解引用时产生未定义行为，
+重复 Lane ID 静默丢弃。pedestrian_set_path_ 完全未使用，头文件 guard 仍错误沿用
+CORE_SEMANTIC_MAP 命名。M1 应定义版本化 arena schema 和统一 Result/诊断列表，事务式解析到
+临时对象后再提交，显式支持/拒绝 GeoJSON geometry 变体，校验 CRS、拓扑、几何和车辆物理
+范围，并为缺文件、坏 JSON、空 Lane、重复 ID、多 polygon/洞、ID 0 和重复加载建立测试。
