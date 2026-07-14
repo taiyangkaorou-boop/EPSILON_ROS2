@@ -1,11 +1,14 @@
 <launch>
+  <!-- ROS1 遗留入口：声明静态/动态真值输出和 playground 场景。 -->
   <arg name="arena_info_static_topic" value="/arena_info_static" />
   <arg name="arena_info_dynamic_topic" value="/arena_info_dynamic" />
 
+  <!-- 先启动 joystick，再从 playgrounds 包解析三份场景 JSON。 -->
   <include file="$(find phy_simulator)/launch/joy_ctrl.launch"/>
 
   <arg name="playground" value = "highway_v1.0" />
 
+  <!-- 启动物理仿真进程并重映射两类 ArenaInfo topic。 -->
   <node pkg="phy_simulator" name="phy_simulator_planning_node" type="phy_simulator_planning_node" output="screen">
     <param name="vehicle_info_path" type="string" value="$(find playgrounds)/$(arg playground)/vehicle_set.json" />
     <param name="map_path" type="string" value="$(find playgrounds)/$(arg playground)/obstacles_norm.json" />

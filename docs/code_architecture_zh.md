@@ -121,6 +121,10 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.4c2 PhySimulation 状态推进与临时障碍物。
 - [x] M0.4c3 ROS2 adapter、visualizer 与仿真节点。
 - [ ] M0.4d playground、集成入口、launch 与构建配置。
+- [x] M0.4d1 物理仿真 GeoJSON 工具与 ROS1/ROS2 launch。
+- [ ] M0.4d2 物理仿真 CMake、package.xml 与 RViz 资源。
+- [ ] M0.4d3 playground 场景资源与包元数据。
+- [ ] M0.4d4 planning_integrated 集成入口与剩余构建/launch 审计。
 - [ ] M0.5 全仓覆盖审计和遗漏补齐。
 
 后续算法任务使用固定 `dev` 分支；每个小任务必须满足：工作树范围清晰、静态检查
@@ -1399,3 +1403,33 @@ spin_some 可能被回调负载拖慢，所有 Update/Publish 返回状态被忽
 
 至此 M0.4c 已完成：从场景 JSON/GeoJSON、车辆模型推进、临时障碍物，到 ROS2 真值和 Marker
 发布的物理仿真职责链已经建立中文索引；逻辑与构建缺陷留待 M1 集中修复。
+
+## 62. M0.4d1：GeoJSON 局部化工具与物理仿真启动入口
+
+- `proc_geojson.py` 从固定 QGIS 工程目录读取 pt_feat/lane_net/obstacles 三份 GeoJSON，在 point
+  features 中查找 name=origin 的坐标，并从每个 Lane/障碍顶点减去该原点；结果写为
+  lane_net_norm.json 和 obstacles_norm.json，随后用中心线和半透明障碍 polygon 绘制人工检查图；
+- ROS2 `phy_simulator_planning_launch.py` 声明静态/动态 ArenaInfo topic 和 playground 名，
+  从 playgrounds 包 share 目录拼接 vehicle_set、obstacles_norm、lane_net_norm 三路径，注入
+  phy_simulator_planning_node 并完成真值 topic remap；
+- 该 launch 还从 phy_simulator 包 share 目录无条件包含 joy_ctrl_launch.py，后者只启动
+  `/dev/input/js0` 的 joy_node；启动前会打印最终 topic、场景和三份资源路径；
+- 同目录两个 `.launch` 是使用 `$(find ...)`、`type=` 和私有 remap 语法的 ROS1 遗留等价入口。
+
+已确认的后续修复/验证点：GeoJSON 脚本没有 main/function/CLI，导入即执行；data_folder 依赖
+当前工作目录和固定 highway 工程，不能选择输入/输出场景。文件 open/read/write、JSON schema、
+origin 是否唯一存在、坐标有限性均不检查；缺 origin 时变量未定义，多 origin 取最后项。与
+ArenaLoader 一样只处理首条 MultiLineString 和首个 MultiPolygon 外环，其余 polygon/洞丢失。
+输入/输出文件句柄不用 context manager 关闭，json.dump 无缩进/排序/原子替换。大量 matplotlib、
+math/pprint import 未使用；随机颜色无 seed，交互 plt.show 阻塞且不适合 CI/headless，Polygon
+位置参数还可能受新版 Matplotlib API 变化影响。脚本不校验输出能否被 ArenaLoader 重新加载，
+也不保存源 CRS/origin/工具版本 hash 作为实验溯源。
+ROS2 仿真 launch 无条件要求 phy_simulator/playgrounds 已正确安装资源；场景名不校验，缺文件
+只在节点运行期失败。joy_node 与当前仿真器没有直接订阅链，却总被启动；设备固定 Linux
+`/dev/input/js0`，在无 joystick、容器或不同权限环境下产生无关错误，也没有 launch argument
+或条件开关。use_sim_time、仿真/发布频率、frame、控制 topic 和 QoS 都不可配置。joy 文件保留
+大量未使用模板 import 注释。ROS1 XML 入口在 ROS2 包中不可执行且可能误导；其 remap 使用
+`~arena_info_*`，与当前相对 publisher 名也不等价。M1 应把转换器改为可测试 CLI/library，
+支持完整 GeoJSON geometry、确定性无头验证图和原子输出，并生成 manifest/hash；ROS2 launch
+应提供 joystick 条件、设备/频率/use_sim_time/topic 参数和资源存在性检查，ROS1 文件则迁移
+到明确 legacy 目录或删除，并覆盖缺场景、无 origin、多 polygon、headless 和无 joystick 测试。

@@ -1,5 +1,8 @@
+"""启动固定 Linux joystick 设备 `/dev/input/js0` 的 ROS2 joy_node。"""
+
 from launch import LaunchDescription
 from launch_ros.actions import Node
+# 以下保留的模板 import 展示其它 launch 能力，当前文件均未启用。
 # 封装终端指令相关类--------------
 # from launch.actions import ExecuteProcess
 # from launch.substitutions import FindExecutable
@@ -19,7 +22,9 @@ from launch_ros.actions import Node
 # from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
-    # Node configuration
+    """构造只包含 joy_node 的 LaunchDescription。"""
+
+    # joystick 设备路径固定，发布 topic 和 QoS 使用 joy 包默认值。
     joy_node = Node(
         package='joy',
         executable='joy_node',
@@ -28,6 +33,7 @@ def generate_launch_description():
         parameters=[{'dev': '/dev/input/js0'}]
     )
 
+    # 返回单节点启动描述。
     return LaunchDescription([
         joy_node
     ])
