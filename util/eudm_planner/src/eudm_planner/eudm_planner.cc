@@ -990,11 +990,13 @@ ErrorType EudmPlanner::RunOnce() {
   return kSuccess;
 }
 
+// 汇总一条成功候选的逐层折扣代价和末端代价。
 ErrorType EudmPlanner::EvaluateSinglePolicyTrajs(
     const std::vector<CostStructure>& progress_cost,
     const CostStructure& tail_cost, const std::vector<DcpAction>& action_seq,
     decimal_t* score) {
   decimal_t score_tmp = 0.0;
+  // progress cost 已在场景仿真中写入动作时长和层级折扣。
   for (const auto& c : progress_cost) {
     score_tmp += c.ave();
   }
@@ -1002,12 +1004,14 @@ ErrorType EudmPlanner::EvaluateSinglePolicyTrajs(
   return kSuccess;
 }
 
+// 在 sim_res_ 成功的候选中线性搜索最小总代价。
 ErrorType EudmPlanner::EvaluateMultiThreadSimResults(int* winner_id,
                                                      decimal_t* winner_cost) {
   decimal_t min_cost = kInf;
   int best_id = 0;
   int num_sequences = sim_res_.size();
   for (int i = 0; i < num_sequences; ++i) {
+    // 仿真失败/被预删的候选不参与竞争。
     if (sim_res_[i] == 0) {
       continue;
     }
@@ -1016,6 +1020,7 @@ ErrorType EudmPlanner::EvaluateMultiThreadSimResults(int* winner_id,
     EvaluateSinglePolicyTrajs(progress_cost_[i], tail_cost_[i], action_seq,
                               &cost);
     final_cost_[i] = cost;
+    // 相同代价保留索引更小、枚举更早的候选。
     if (cost < min_cost) {
       min_cost = cost;
       best_id = i;
@@ -1026,12 +1031,14 @@ ErrorType EudmPlanner::EvaluateMultiThreadSimResults(int* winner_id,
   return kSuccess;
 }
 
+// 对两条等长预测轨迹逐样本执行 RSS 检查，并累计速度违反代价。
 ErrorType EudmPlanner::EvaluateSafetyStatus(
     const vec_E<common::Vehicle>& traj_a, const vec_E<common::Vehicle>& traj_b,
     decimal_t* cost, bool* is_rss_safe, int* risky_id) {
   if (traj_a.size() != traj_b.size()) {
     return kWrongStatus;
   }
+  // RSS 被禁用或参考 Lane 无效时直接跳过，不主动重置输出参数。
   if (!cfg_.safety().rss_check_enable() || !rss_lane_.IsValid()) {
     return kSuccess;
   }
@@ -1039,6 +1046,7 @@ ErrorType EudmPlanner::EvaluateSafetyStatus(
   decimal_t cost_tmp = 0.0;
   bool ret_is_rss_safe = true;
   const int check_per_state = 1;
+  // 当前每个离散样本都检查，代价未按实际 dt 归一化。
   for (int i = 0; i < num_states; i += check_per_state) {
     bool is_rss_safe = true;
     common::RssChecker::LongitudinalViolateType type;
@@ -1048,8 +1056,10 @@ ErrorType EudmPlanner::EvaluateSafetyStatus(
                                  &rss_vel_up);
     if (!is_rss_safe) {
       ret_is_rss_safe = false;
+      // 一对轨迹共享同一周车 ID，取其首样本标记风险来源。
       *risky_id = traj_b.size() ? traj_b[0].id() : 0;
       if (cfg_.cost().safety().rss_cost_enable()) {
+        // 过快/过慢分别按速度偏差的 10 指数形式累加软约束代价。
         if (type == common::RssChecker::LongitudinalViolateType::TooFast) {
           cost_tmp +=
               cfg_.cost().safety().rss_over_speed_linear_coeff() *
@@ -1072,6 +1082,7 @@ ErrorType EudmPlanner::EvaluateSafetyStatus(
   return kSuccess;
 }
 
+// 对自车与每辆周车的等时轨迹执行膨胀车身离散碰撞检查。
 ErrorType EudmPlanner::StrictSafetyCheck(
     const vec_E<common::Vehicle>& ego_traj,
     const std::unordered_map<int, vec_E<common::Vehicle>>& surround_trajs,
@@ -1082,11 +1093,12 @@ ErrorType EudmPlanner::StrictSafetyCheck(
   }
 
   int num_points_ego = ego_traj.size();
+  // 空轨迹当前被视为严格安全。
   if (num_points_ego == 0) {
     *is_safe = true;
     return kSuccess;
   }
-  // strict collision check
+  // 逐周车检查轨迹长度一致性和每个同步样本的车身碰撞。
   for (auto it = surround_trajs.begin(); it != surround_trajs.end(); it++) {
     int num_points_other = it->second.size();
     if (num_points_other != num_points_ego) {
@@ -1095,6 +1107,7 @@ ErrorType EudmPlanner::StrictSafetyCheck(
       return kSuccess;
     }
     for (int i = 0; i < num_points_ego; i++) {
+      // 两车使用相同的宽/长膨胀量后再做几何碰撞检测。
       common::Vehicle inflated_a, inflated_b;
       common::SemanticsUtils::InflateVehicleBySize(
           ego_traj[i], cfg_.safety().strict().inflation_w(),
@@ -1103,6 +1116,7 @@ ErrorType EudmPlanner::StrictSafetyCheck(
           it->second[i], cfg_.safety().strict().inflation_w(),
           cfg_.safety().strict().inflation_h(), &inflated_b);
       bool is_collision = false;
+      // 当前忽略地图碰撞查询返回码，失败时保留默认 false。
       map_itf_->CheckCollisionUsingState(inflated_a.param(), inflated_a.state(),
                                          inflated_b.param(), inflated_b.state(),
                                          &is_collision);
@@ -1117,6 +1131,7 @@ ErrorType EudmPlanner::StrictSafetyCheck(
   return kSuccess;
 }
 
+// 计算一个动作层的效率、RSS/禁换安全和换道导航代价。
 ErrorType EudmPlanner::CostFunction(
     const DcpAction& action, const ForwardSimEgoAgent& ego_fsagent,
     const ForwardSimAgentSet& other_fsagent,
@@ -1132,15 +1147,15 @@ ErrorType EudmPlanner::CostFunction(
   auto seq_lat_behavior = ego_fsagent.seq_lat_behavior;
   auto is_cancel_behavior = ego_fsagent.is_cancel_behavior;
 
+  // 用本层末状态构造周车集合，供目标 Lane 前车搜索使用。
   common::VehicleSet vehicle_set;
   for (const auto& v : other_fsagent.forward_sim_agents) {
     vehicle_set.vehicles.insert(std::make_pair(v.first, v.second.vehicle));
   }
 
   decimal_t ego_velocity = ego_fsagent.vehicle.state().velocity;
-  // f = c1 * fabs(v_ego - v_user), if v_ego < v_user
-  // f = c2 * fabs(v_ego - v_user - vth), if v_ego > v_user + vth
-  // unit of this cost is velocity (finally multiplied by duration)
+  // 自车低于期望速度时线性惩罚；超过期望速度加容忍带后用另一系数惩罚。
+  // 该分项量纲为速度，函数末尾再乘动作持续时间。
   CostStructure cost_tmp;
   if (ego_fsagent.vehicle.state().velocity < desired_velocity_) {
     cost_tmp.efficiency.ego_to_desired_vel =
@@ -1157,9 +1172,8 @@ ErrorType EudmPlanner::CostFunction(
     }
   }
 
-  // f = ratio * c1 * fabs(v_ego - v_user) , if v_ego < v_user && v_ego
-  // > v_leading
-  // unit of this cost is velocity (finally multiplied by duration)
+  // 目标 Lane 前车较慢且距离低于阈值时，按剩余搜索距离比例叠加阻塞代价。
+  // 该分项同样在函数末尾乘动作持续时间。
   common::Vehicle leading_vehicle;
   decimal_t distance_residual_ratio = 0.0;
   if (map_itf_->GetLeadingVehicleOnLane(
@@ -1196,7 +1210,7 @@ ErrorType EudmPlanner::CostFunction(
     }
   }
 
-  // * safety
+  // 对每辆周车的完整本层轨迹计算 RSS 风险和软代价。
   for (const auto& surround_traj : surround_trajs) {
     decimal_t safety_cost = 0.0;
     bool is_safe = true;
@@ -1210,6 +1224,7 @@ ErrorType EudmPlanner::CostFunction(
     cost_tmp.safety.rss += safety_cost;
   }
 
+  // 用户/上层明确 forbid 换道时，对整条序列方向施加速度相关安全代价。
   if (cfg_.cost().safety().occu_lane_enable()) {
     if (lc_info_.forbid_lane_change_left &&
         seq_lat_behavior == LateralBehavior::kLaneChangeLeft) {
@@ -1222,15 +1237,17 @@ ErrorType EudmPlanner::CostFunction(
     }
   }
 
-  // * navigation
+  // 换道序列按方向、取消和用户推荐计算导航偏好；LK 不产生该分项。
   if (seq_lat_behavior == LateralBehavior::kLaneChangeLeft ||
       seq_lat_behavior == LateralBehavior::kLaneChangeRight) {
     if (is_cancel_behavior) {
+      // 取消序列使用独立单位代价。
       cost_tmp.navigation.lane_change_preference =
           std::max(cfg_.cost().navigation().lane_change_unit_cost_vel_lb(),
                    ego_velocity) *
           cfg_.cost().user().cancel_operation_unit_cost();
     } else {
+      // 普通换道先施加方向单位代价。
       cost_tmp.navigation.lane_change_preference =
           std::max(cfg_.cost().navigation().lane_change_unit_cost_vel_lb(),
                    ego_velocity) *
@@ -1239,6 +1256,7 @@ ErrorType EudmPlanner::CostFunction(
                : cfg_.cost().navigation().lane_change_right_unit_cost());
       if (lc_info_.recommend_lc_left &&
           seq_lat_behavior == LateralBehavior::kLaneChangeLeft) {
+        // 推荐方向改为负奖励；尚未实际开始换道的层再加延迟操作代价。
         cost_tmp.navigation.lane_change_preference =
             -std::max(cfg_.cost().navigation().lane_change_unit_cost_vel_lb(),
                       ego_velocity) *
@@ -1251,6 +1269,7 @@ ErrorType EudmPlanner::CostFunction(
         }
       } else if (lc_info_.recommend_lc_right &&
                  seq_lat_behavior == LateralBehavior::kLaneChangeRight) {
+        // 右换道推荐与左侧使用对称逻辑。
         cost_tmp.navigation.lane_change_preference =
             -std::max(cfg_.cost().navigation().lane_change_unit_cost_vel_lb(),
                       ego_velocity) *
@@ -1264,6 +1283,7 @@ ErrorType EudmPlanner::CostFunction(
       }
     }
   }
+  // 层代价先乘动作时长，调用方随后再乘 discount_factor^layer。
   cost_tmp.weight = duration;
   *cost = cost_tmp;
   return kSuccess;

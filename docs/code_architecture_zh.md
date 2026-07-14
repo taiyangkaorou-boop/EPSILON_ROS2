@@ -129,11 +129,11 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [ ] M0.5a EUDM 决策树、地图接口、规划器、管理器、ROS 与配置。
 - [x] M0.5a1 EUDM DCP tree 与公共 Task/LaneChangeInfo 接口。
 - [x] M0.5a2 EUDM 地图接口与 SemanticMapManager 适配器。
-- [ ] M0.5a3 EUDM 规划核心。
+- [x] M0.5a3 EUDM 规划核心。
 - [x] M0.5a3a EUDM 公共类型、接口与状态所有权。
 - [x] M0.5a3b EUDM 配置、动作转换与周期编排。
 - [x] M0.5a3c EUDM 场景/动作层/积分步前向仿真。
-- [ ] M0.5a3d EUDM 代价、RSS 与严格安全评价。
+- [x] M0.5a3d EUDM 代价、RSS 与严格安全评价。
 - [ ] M0.5a4 EUDM manager、ROS server 与 visualizer。
 - [ ] M0.5a5 EUDM proto、CMake 与 package 元数据。
 - [ ] M0.5b ai_agent planner 与 launch/build。
@@ -1702,3 +1702,39 @@ CheckIfLateralActionFinished 忽略最近 Lane/拓扑查询错误，并只凭 La
 异常边界，再实现基于行为概率的有限多模态场景树、动态 gap 重选、周车对自车动作的交互响应、
 风险敏感聚合与 beam/pruning，并对 H=1、t=0、负/NaN step、查询失败、车辆缺失、Lane 边界抖动、
 周车换道/让行/抢行、多分支概率校准以及 N=5/10/20/40 的时延扩展性建立测试。
+
+## 71. M0.5a3d：EUDM 代价、RSS 与严格安全评价
+
+- StrictSafetyCheck 是硬约束：每层对自车和每辆周车的等长轨迹逐样本做相同宽/长膨胀后的车身
+  碰撞检测；任一碰撞使候选仿真失败，不再进入最终竞争；
+- EvaluateSafetyStatus 是软风险链：在 rss_lane_ Frenet 坐标下逐样本调用 RssCheck，记录风险
+  周车 ID，并按 TooFast/TooSlow 相对 RSS 速度上下界的偏差，用线性速度项乘 10 的指数项累加
+  RSS 代价；RSS 违反不会直接淘汰候选；
+- CostFunction 用本层末状态计算自车相对期望速度损失和慢前车阻塞损失，对全部周车轨迹累加
+  RSS 代价；forbid 与脚本换道方向一致时增加 occu_lane 代价；换道/取消产生导航代价，用户推荐
+  方向产生负奖励，尚未开始推荐换道的层增加 late-operate 代价；
+- 每层 CostStructure 的三类代价先经各自 ave() 聚合并乘动作 duration，再乘
+  discount_factor^layer。EvaluateSinglePolicyTrajs 对 progress 和 tail 求和，
+  EvaluateMultiThreadSimResults 在 sim_res 成功候选中取最小值，相同代价保留枚举靠前者。
+
+已确认的后续修复/验证点：tail_cost 从未计算，EvaluateSinglePolicyTrajs 的 action_seq 参数未使用，
+因此没有终端安全/效率/目标进展价值；winner_action_seq 也未同步。RSS 被禁用、rss_lane 无效或
+轨迹长度不等时，EvaluateSafetyStatus 不完整初始化 cost/is_rss_safe/risky_id，调用安全依赖外部
+预设；RssCheck 返回码被忽略，循环内局部 is_rss_safe 还遮蔽同名输出指针。RSS 代价按样本直接
+求和、没有乘 dt，却在层级再乘 duration，改变 step 会改变同一物理轨迹的分数并可能重复放大
+时长；10 的指数项缺少上界，极端速度差可溢出。StrictSafetyCheck 把空轨迹视为安全，只在离散
+样本检查而没有 swept-volume/连续碰撞，可能跨步穿透；轨迹长度不一致和碰撞查询失败的错误语义
+不统一，后者被默认 false 当作无碰撞。EvaluateMultiThreadSimResults 若脱离 RunEudm 前置检查，
+无有效候选也会返回 winner=0、cost=inf 和成功；失败候选 final_cost 保持 0，诊断/可视化若忘记
+结合 sim_res 会误读。CostFunction 的 verbose、当前层 lon/lat 局部变量未使用；效率只看层末状态，
+前车搜索也只看末端快照。LaneChangeInfo 的 unsafe_by_occu 和 solid_lane 字段在全 EUDM 中仅被
+日志打印，完全不进入硬约束或代价；forbid 与 recommend 矛盾时会同时得到安全惩罚和导航奖励。
+现有目标没有舒适性（加速度/jerk/曲率率）、车道/规则合规、route progress、换道完成质量、
+周车扰动/courtesy、模型不确定性或尾部风险，三组 ave() 的固定 1/2 缩放也缺少量纲归一化依据。
+M1 应先建立 dt-invariant 的积分代价、连续碰撞/自适应采样、输出全初始化和 LaneChangeInfo 冲突
+优先级；创新模块可加入终端价值、交互礼让/扰动、舒适与规则、预测置信度和 CVaR/最坏分位风险，
+并通过 step=0.05/0.1/0.2/0.5 等价性、极端速度数值稳定、跨步碰撞、RSS 开关/无 Lane、矛盾 HMI、
+空/不等长轨迹、无有效候选以及各代价模块消融来验证。
+
+至此 M0.5a3 已完成：EUDM 规划核心的公共状态、周期编排、分层前向仿真、硬安全和软代价链均已
+建立中文职责与静态风险索引。后续 M0.5a4 转向 EudmManager、ROS2 server 和 visualizer。
