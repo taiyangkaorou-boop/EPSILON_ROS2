@@ -1,7 +1,9 @@
+# EUDM baseline 默认配置。tree_height=5 时 DCP tree 生成 27 条候选。
 name: "planning.eudm.Config"
 version: ""
 status: "SET"
 
+# 逐动作层代价；最终还会乘动作时长和 discount_factor^layer。
 cost {
   effciency {
     ego_lack_speed_to_desired_unit_cost: 0.3
@@ -26,6 +28,7 @@ cost {
     cancel_operation_unit_cost: 8.0
   }
   navigation {
+    # 左换基础代价为右换的 1/4，默认配置存在显式方向偏置。
     lane_change_left_unit_cost: 0.015
     lane_change_right_unit_cost: 0.06
     lane_change_unit_cost_vel_lb: 10.0
@@ -35,6 +38,7 @@ cost {
   discount_factor: 0.7
 }
 
+# 5 层、0.2 s 积分；普通配置下名义前向时域约 5 s。
 sim {
   duration {
     layer: 1.0
@@ -43,6 +47,7 @@ sim {
     tree_height: 5
   }
   ego {
+    # 自车 IDM 和运动学限制。
     lon {
       idm {
         min_spacing: 2.0
@@ -72,6 +77,7 @@ sim {
       }
     }
     evasive {
+      # 目标 Lane 后车逼近时允许加速并用 virtual barrier 暂缓横移。
       evasive_enable : true
       lon_acc: 2.0
       lon_jerk: 3.0
@@ -85,6 +91,7 @@ sim {
     lon_aggressive_ratio: 0.25
   }
   agent {
+    # 周车当前只沿固定预测 Lane 传播；其 evasive/lon_aggressive 字段未被核心使用。
     lon {
       idm {
         min_spacing: 1.0
@@ -129,6 +136,7 @@ sim {
   acc_cmd_vel_gap: 10.0
   dec_cmd_vel_gap: 10.0
   ref_line {
+    # 前向长度 = clamp(velocity * 10, 50, 150)，后向最多 20 m。
     len_vel_coeff: 10.0
     forward_len_max: 150.0
     forward_len_min: 50.0
@@ -136,6 +144,7 @@ sim {
   }
 }
 
+# active LC 已启用，但当前 IsTriggerAppropriate 被编译为恒 true。
 function {
   mobil_enable: false
   active_lc_enable: true
@@ -156,6 +165,7 @@ function {
   stick_lane_change_in_seconds: 0.0
 }
 
+# 硬碰撞与全轨迹 RSS 开启；换道层开始时的严格 RSS 初筛关闭。
 safety {
   strict_check_enable: true
   strict {
@@ -174,6 +184,7 @@ safety {
     lateral_miu: 0.5
   }
   rss_strict_as_front {
+    # longitudinal_brake_min=5 大于 max=4，需在 M1 明确参数语义并校验。
     response_time: 0.1
     longitudinal_acc_max: 0.5
     longitudinal_brake_min: 5.0

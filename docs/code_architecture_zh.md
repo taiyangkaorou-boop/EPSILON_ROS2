@@ -126,7 +126,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.4d3 playground 场景资源与包元数据。
 - [x] M0.4d4 planning_integrated 集成入口与剩余构建/launch 审计。
 - [ ] M0.5 全仓覆盖审计和遗漏补齐。
-- [ ] M0.5a EUDM 决策树、地图接口、规划器、管理器、ROS 与配置。
+- [x] M0.5a EUDM 决策树、地图接口、规划器、管理器、ROS 与配置。
 - [x] M0.5a1 EUDM DCP tree 与公共 Task/LaneChangeInfo 接口。
 - [x] M0.5a2 EUDM 地图接口与 SemanticMapManager 适配器。
 - [x] M0.5a3 EUDM 规划核心。
@@ -138,7 +138,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.5a4a EUDM manager 公共状态、快照与所有权。
 - [x] M0.5a4b EUDM manager 动作续接、HMI 状态机与重选实现。
 - [x] M0.5a4c EUDM ROS2 server 与 visualizer。
-- [ ] M0.5a5 EUDM proto、CMake 与 package 元数据。
+- [x] M0.5a5 EUDM proto、CMake 与 package 元数据。
 - [ ] M0.5b ai_agent planner 与 launch/build。
 - [ ] M0.5c route_planner、vehicle_msgs 与公共 Planner 接口遗漏。
 - [ ] M0.5d 第一方包构建元数据补注释。
@@ -1837,3 +1837,37 @@ Start/Stop/重复启动、对象销毁、0/高频率、队列满、多生产者�
 
 至此 M0.5a4 已完成：EUDM manager 的跨周期/HMI 状态机以及 ROS2 输入、线程、回调和可视化边界均已
 建立中文职责与静态风险索引。下一阶段 M0.5a5 审计 protobuf 配置、CMake 和 package 元数据。
+
+## 75. M0.5a5：EUDM protobuf 配置、默认参数与构建元数据
+
+- proto2 Config 分为 cost、sim、function、safety：代价含效率/RSS/forbid/用户操作/导航推荐；仿真
+  含 DCP 时域、自车/周车 IDM 与横向限制、避让和参考 Lane；功能含 active/stick LC；安全含硬碰撞、
+  常规 RSS、前后角色严格 RSS 和层级初筛；全部字段均 required；
+- 默认 tree_height=5、layer/last_layer=1 s、step=0.2 s，DCP 公式给出 27 条候选和名义 5 s 时域；
+  discount=0.7，参考 Lane 长度为 clamp(10*v,50,150) m；自车/周车使用不同 IDM 和横向限制；
+- active LC 开启、速度窗口 4~24 m/s、连续 4 帧、冷却 5 s；strict collision 和全轨迹 RSS 开启，
+  rss_for_layers 关闭；左右换道基础单位代价为 0.015/0.06，存在 4 倍左向偏置；
+- CMake 生成 protobuf 源并构建 hkust_pl_eudm 与 hkust_eudm_ros，安装 textproto、手写头和两个库，
+  通过旧式 include/export 机制暴露依赖；package.xml 声明 ament、ROS2、内部规划库、protobuf/glog。
+
+已确认的后续修复/验证点：effciency、enable_auto_canbel 已固化为拼写错误 API；
+consistent_min_num_frame 应为 int32 却声明 double。mobil_enable 完全未消费；agent.evasive 和
+agent.lon_aggressive_ratio 被 required 但核心未使用；name/version/status 也不参与兼容性检查，version
+默认还是空字符串。所有字段 required 使新增/迁移脆弱，且 schema 没有单位、合法范围、有限性或字段
+间约束。默认左/右换道代价不对称会给实验引入方向先验；recommend reward=1.0 远大于基础换道代价，
+forbid/recommend 冲突时排名敏感。rss_strict_as_front 的 longitudinal_brake_min=5、max=4 顺序与常规
+配置相反，必须确认 RSS 参数语义；layer RSS 初筛关闭意味着 gap 前置门限代码默认不生效。
+CMake 无条件设置 Release/-O3，覆盖调试/基准构建；CMAKE_MODULE_PATH 指向不存在目录；使用全局
+include_directories/compile_options 和内部 target 名而非现代 target/ament_target_dependencies。
+eudm_planner.h 公共安装头包含 eudm_config.pb.h，但构建只安装手写 include，生成头没有安装，
+install-space 下游会编译失败；导出构建目录不能替代安装。server/visualizer 直接包含 tf2、tf2_ros、
+tf2_geometry_msgs 和 visualization_msgs，但 CMake 缺 TF find/export，package.xml 还漏 visualization/TF；
+rclpy 未使用，rosidl_default_runtime 只声明 build_depend 且本包不生成接口。moodycamel 通过 common
+thirdparty 的传递 include 隐式获得。package 版本 0.0.0、license TODO、maintainer 邮箱 todo、描述无信息，
+无 lint/单元测试/安装空间测试。M1 应建立带单位和 validator 的 Config V2（旧字段兼容迁移），冻结
+baseline/innovation 两套参数及 hash；构建改为 target-based 导出并安装生成头，补齐直接依赖和
+ament export targets，增加 build/install consumer test、textproto parse/range test、左右镜像参数审计、
+配置敏感性/网格实验以及 Debug/Release/ASan/TSan 构建矩阵。
+
+至此 M0.5a 全部完成：EUDM 动作树、地图、核心仿真/评价、manager/HMI、ROS2 集成、配置和构建均已
+形成逐文件中文职责、调用链和静态缺陷索引。M0.5b 将转向 util/ai_agent_planner。

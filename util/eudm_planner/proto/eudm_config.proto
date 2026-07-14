@@ -2,6 +2,7 @@ syntax = "proto2";
 
 package planning.eudm;
 
+// 效率代价：自车期望速度偏差和慢前车阻塞。
 message EfficiencyAssessDetail {
   required double ego_lack_speed_to_desired_unit_cost = 1;
   required double ego_over_speed_to_desired_unit_cost = 2;
@@ -12,6 +13,7 @@ message EfficiencyAssessDetail {
   required double leading_speed_blocked_desired_vel_unit_cost = 7;
 }
 
+// 安全软代价：RSS 速度违反和上层 forbid 方向惩罚。
 message SafetyAssessDetail {
   required bool rss_cost_enable = 1;
   required double rss_over_speed_power_coeff = 2;
@@ -22,11 +24,13 @@ message SafetyAssessDetail {
   required double occu_lane_unit_cost = 7;
 }
 
+// 用户意图代价：延迟执行推荐换道和换道后取消。
 message UserIntentionAssessDetail {
   required double late_operate_unit_cost = 1;
   required double cancel_operation_unit_cost = 2;
 }
 
+// 导航偏好：左右换道基础代价、低速下界和推荐奖励。
 message NavigationAssessDetail {
   required double lane_change_left_unit_cost = 1;
   required double lane_change_right_unit_cost = 2;
@@ -35,6 +39,7 @@ message NavigationAssessDetail {
   required double lane_change_right_recommendation_reward = 5;
 }
 
+// 单层代价总配置；effciency 拼写已固化到生成 API。
 message CostAssessCfg {
   required EfficiencyAssessDetail effciency = 1;
   required SafetyAssessDetail safety = 2;
@@ -43,6 +48,7 @@ message CostAssessCfg {
   required double discount_factor = 5;
 }
 
+// DCP 时域：普通层、末层、积分步（秒）和树高。
 message SimDurationDetail {
   required double layer = 1;
   required double last_layer = 2;
@@ -50,6 +56,7 @@ message SimDurationDetail {
   required int32 tree_height = 4;
 }
 
+// 纵向加减速度和 jerk 限制。
 message LonSimLimit {
   required double acc = 1;
   required double acc_jerk = 2;
@@ -58,17 +65,20 @@ message LonSimLimit {
   required double brake_jerk = 5;
 }
 
+// IDM 最小间距、期望时距和指数。
 message LonSimIdm {
   required double min_spacing = 1;
   required double head_time = 2;
   required int32 exponent = 3;
 }
 
+// 单类车辆纵向传播配置。
 message LonSimDetail {
   required LonSimIdm idm = 1;
   required LonSimLimit limit = 2;
 }
 
+// 横向加速度、jerk、曲率、转角和转角速度绝对上限。
 message LatSimLimit {
   required double acc = 1;
   required double jerk = 2;
@@ -77,17 +87,20 @@ message LatSimLimit {
   required double steer_rate = 5;
 }
 
+// Pure-pursuit 增益和前视距离范围。
 message LatSimPurePursuit {
   required double gain = 1;
   required double max_lookahead_dist = 2;
   required double min_lookahead_dist = 3;
 }
 
+// 单类车辆横向传播配置。
 message LatSimDetail {
   required LatSimPurePursuit pure_pursuit = 1;
   required LatSimLimit limit = 2;
 }
 
+// 换道后车逼近时的纵向避让与 virtual barrier 配置。
 message EvasiveSimDetail {
   required bool evasive_enable = 1;
   required double lon_acc = 2;
@@ -98,6 +111,7 @@ message EvasiveSimDetail {
   required double virtual_barrier_tic = 7;
 }
 
+// 自车/周车共用的单车传播参数集合。
 message ForwardSimDetail {
   required LonSimDetail lon = 1;
   required LatSimDetail lat = 2;
@@ -107,6 +121,7 @@ message ForwardSimDetail {
   required double lon_aggressive_ratio = 6;
 }
 
+// 每层参考 Lane 长度随速度变化的截断参数，长度单位为米。
 message SimRefLine {
   required double len_vel_coeff = 1;
   required double forward_len_max = 2;
@@ -114,6 +129,7 @@ message SimRefLine {
   required double backward_len_max= 4;
 }
 
+// 前向仿真总配置：时域、自车/周车模型和 M/A/D 速度档差。
 message SimCfg {
   required SimDurationDetail duration = 1;
   required ForwardSimDetail ego = 2;
@@ -123,6 +139,7 @@ message SimCfg {
   required SimRefLine ref_line = 6;
 }
 
+// 主动换道提案的冷却、速度窗口、一致性和自动取消配置。
 message ActiveLaneChangeCfg {
   required double cold_duration = 1;
   required double activate_speed_lower_bound = 2;
@@ -130,21 +147,26 @@ message ActiveLaneChangeCfg {
   required double activate_max_duration_in_seconds = 4;
   required double active_min_operation_in_seconds = 5;
   required double consistent_operate_time_min_gap = 6;
+  // 连续一致帧数当前使用 double 表示，但代码按容器长度阈值比较。
   required double consistent_min_num_frame = 7;
   required bool enable_clear_accumulation_by_forbid_signal = 8;
   required bool enable_auto_cancel_by_forbid_signal = 9;
   required bool enable_auto_cancel_by_outdate_time = 10;
+  // canbel 为历史拼写，表示是否允许拨杆信号取消 active 换道。
   required bool enable_auto_canbel_by_stick_signal = 11;
   required double auto_cancel_if_late_for_seconds = 12;
 }
 
+// 功能开关和人工 stick 换道计划延迟。
 message FunctionCfg {
+  // mobil_enable 当前没有代码消费者。
   required bool mobil_enable = 1;
   required bool active_lc_enable = 2;
   required ActiveLaneChangeCfg active_lc = 3;
   required double stick_lane_change_in_seconds = 4;
 }
 
+// RSS 响应时间、纵横向加减速度界和横向重叠系数。
 message RssCfg {
   required double response_time = 1;
   required double longitudinal_acc_max = 2;
@@ -156,11 +178,13 @@ message RssCfg {
   required double lateral_miu = 8;
 }
 
+// 严格碰撞检查对车辆宽/长的膨胀量。
 message StrictCheckCfg {
   required double inflation_w = 1;
   required double inflation_h = 2;
 }
 
+// 硬碰撞、常规 RSS、前后角色严格 RSS 和层级换道初筛开关。
 message SafetyCfg {
   required StrictCheckCfg strict = 1;
   required bool strict_check_enable = 2;
@@ -171,6 +195,7 @@ message SafetyCfg {
   required bool rss_for_layers_enable = 7;
 }
 
+// EUDM 根配置：元数据、代价、仿真、功能和安全。
 message Config {
   required string name = 1;
   required string version = 2;

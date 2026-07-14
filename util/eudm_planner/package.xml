@@ -6,7 +6,7 @@
   <maintainer email="wdingae@todo.com">HKUST_UAV_GROUP</maintainer>
   <license>TODO</license>
 
-  <!-- Build and run dependencies -->
+  <!-- ament 构建工具及当前声明的编译/运行依赖。 -->
   <buildtool_depend>ament_cmake</buildtool_depend>
   <depend>rclcpp</depend>
   <depend>rclpy</depend>
@@ -18,11 +18,12 @@
   <depend>route_planner</depend>
   <depend>vehicle_msgs</depend>
   <depend>protobuf</depend>
-  <depend>glog</depend> <!-- Add this line -->
+  <depend>glog</depend>
 
+  <!-- 当前包不生成 ROS interface，此依赖需要在 M1 复核。 -->
   <build_depend>rosidl_default_runtime</build_depend>
 
-  <!-- Export tags can include additional information needed for other tools -->
+  <!-- 声明标准 ament_cmake 构建类型。 -->
   <export>
     <build_type>ament_cmake</build_type>
   </export>
