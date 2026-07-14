@@ -131,7 +131,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.5a2 EUDM 地图接口与 SemanticMapManager 适配器。
 - [ ] M0.5a3 EUDM 规划核心。
 - [x] M0.5a3a EUDM 公共类型、接口与状态所有权。
-- [ ] M0.5a3b EUDM 配置、动作转换与周期编排。
+- [x] M0.5a3b EUDM 配置、动作转换与周期编排。
 - [ ] M0.5a3c EUDM 场景/动作层/积分步前向仿真。
 - [ ] M0.5a3d EUDM 代价、RSS 与严格安全评价。
 - [ ] M0.5a4 EUDM manager、ROS server 与 visualizer。
@@ -1636,3 +1636,37 @@ sim_res/risky_res 还逐项重建 vector<bool>。所有私有输出仍用裸指�
 构造后不变量和 initialized 状态，补齐或删除悬空 API，用 const 引用/只读 Snapshot move 交接结果，
 并为未 Init、重复 Init、复制/移动、缺失符号、空 winner/tail、未初始化结构及大规模结果复制做
 编译链接测试、单元测试和内存/时延基准。
+
+## 69. M0.5a3b：EUDM 配置、动作转换与周期编排
+
+- ReadConfig 用 POSIX fd 和 protobuf TextFormat 读取配置；Init 据此创建 DcpTree，把 ego/agent
+  的 IDM、纵横向 jerk、pure-pursuit 和曲率/转角限制映射到传播参数，并创建常规、严格前车、
+  严格后车三套 RSS 配置；
+- TranslateDcpActionToLonLatBehavior 完成 DCP M/A/D、K/L/R 到 common 行为枚举的映射；
+  ClassifyActionSeq 累计首次 LCL/LCR 前的时长，输出长期换道方向，并把换道后出现 LK 识别为
+  cancel；全 LK 的 operation time 被放在规划时域之后一个普通 layer；
+- GetSurroundingForwardSimAgents 把 SemanticVehicle 转为固定 Lane 的仿真 agent。周车当前加速度
+  非负时把期望速度设为当前速度，负加速度则外推到规划时域末端；同时保留横向行为概率和 Lane；
+- RunEudm 为每条 DCP 脚本创建一个 std::thread，各线程写预分配容器的独立 seq_id 槽位；join 后
+  输出全部候选动作/有效性/风险/代价，至少一条成功时再选择累计代价最低者；
+- RunOnce 读取自车和最近 Lane，构造前后各 130 m 的 LK RSS 参考 Lane，预删相邻层 LCL->LCR
+  或 LCR->LCL 的脚本，再执行 RunEudm 并记录 winner/time cost；Manager 每周期先 UpdateDcpTree，
+  再注入期望速度和 LaneChangeInfo，因此正常 server 路径会在 RunOnce 前刷新时域和动作树。
+
+已确认的后续修复/验证点：ReadConfig 不检查 open 和 TextFormat::Parse 返回值，fd 关闭所有权也未
+显式声明；解析/required 字段失败只 assert(false)，release 构建仍可能返回 kSuccess。Init 忽略
+ReadConfig/GetSimParam 返回值，且没有配置有限性、正时长、IDM/RSS 物理范围或交叉字段校验。
+ClassifyActionSeq 不校验空序列、负/NaN 时长和输出指针，局部 operation_at 完全未使用；
+PrepareMultiThreadContainers 接受负 n_sequence 时会转为巨大 size_t。RunEudm 忽略周车转换返回值，
+按候选数无上限创建 OS 线程且 std::thread 参数会复制 ego、周车集合和动作序列；缺少线程创建异常
+的 join 防护/线程池，局部 timer 未使用，每周期逐候选 WARNING 日志也会污染实时性测量。
+GetSurroundingForwardSimAgents 对重复 ID 使用 insert 静默丢弃，保存的 lat_probs 后续没有用于多模态
+场景分支。RunOnce 只检查 map_itf_ 非空，不检查 IsValid 和 dcp_tree_ptr_；RSS Lane 查询失败时不
+清空旧 rss_lane_，可能继续在上一周期参考坐标上评价新轨迹，130 m 范围还是硬编码。候选预删和
+胜者日志反复调用 action_script() 深拷贝完整脚本；成功后未填 winner_action_seq_，失败时 time_cost_
+保留上一成功周期。GetPotentialLaneIds 吞掉 child/adjacent Lane 查询错误并固定返回成功；
+UpdateDcpTree 不检查指针或 UpdateScript 返回值；JudgeBehaviorByLaneId/UpdateEgoLaneId 依赖的三组
+potential Lane 缓存从不刷新且函数当前无调用。M1 应引入 ConfigValidator 和明确的 Init 状态机，
+用固定线程池/任务队列和只读共享场景快照，周期开始清空派生缓存，传播精确错误，并为坏路径、
+坏 protobuf、release assert、H=0/1、负候选数、线程创建失败、RSS 查询间歇失败、重复周车 ID、
+大候选实时性以及连续成功/失败周期的结果新鲜度建立测试。

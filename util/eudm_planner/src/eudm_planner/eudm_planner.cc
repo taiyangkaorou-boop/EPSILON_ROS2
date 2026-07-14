@@ -1,3 +1,8 @@
+/**
+ * @file eudm_planner.cc
+ * @brief EUDM 配置、候选编排、交互前向仿真和代价选择实现。
+ */
+
 #include "eudm_planner/eudm_planner.h"
 
 #include <glog/logging.h>
@@ -8,14 +13,18 @@
 
 namespace planning {
 
+// 返回用于日志和通用 Planner 识别的名称。
 std::string EudmPlanner::Name() { return std::string("Eudm behavior planner"); }
 
+// 从 protobuf text 文件解析完整 EUDM 配置。
 ErrorType EudmPlanner::ReadConfig(const std::string config_path) {
   printf("\n[EudmPlanner] Loading eudm planner config\n");
   using namespace google::protobuf;
+  // 直接用 POSIX fd 构造 protobuf 输入流；当前未检查 open/Parse 返回值。
   int fd = open(config_path.c_str(), O_RDONLY);
   io::FileInputStream fstream(fd);
   TextFormat::Parse(&fstream, &cfg_);
+  // 只在 required 字段不完整时 assert；release 构建可能继续返回成功。
   if (!cfg_.IsInitialized()) {
     LOG(ERROR) << "failed to parse config from " << config_path;
     assert(false);
@@ -23,6 +32,7 @@ ErrorType EudmPlanner::ReadConfig(const std::string config_path) {
   return kSuccess;
 }
 
+// 把 protobuf 中的 IDM、jerk、纯跟踪和横向约束逐项映射到传播器参数。
 ErrorType EudmPlanner::GetSimParam(const planning::eudm::ForwardSimDetail& cfg,
                                    OnLaneForwardSimulation::Param* sim_param) {
   sim_param->idm_param.kMinimumSpacing = cfg.lon().idm().min_spacing();
@@ -49,7 +59,9 @@ ErrorType EudmPlanner::GetSimParam(const planning::eudm::ForwardSimDetail& cfg,
   return kSuccess;
 }
 
+// 初始化动作树、两类车辆传播参数和常规/严格 RSS 参数。
 ErrorType EudmPlanner::Init(const std::string config) {
+  // 当前忽略 ReadConfig 返回值，并在每次 Init 时重新分配裸指针。
   ReadConfig(config);
 
   dcp_tree_ptr_ = new DcpTree(cfg_.sim().duration().tree_height(),
@@ -59,9 +71,11 @@ ErrorType EudmPlanner::Init(const std::string config) {
   LOG(INFO) << "[Eudm]ActionScript size: "
             << dcp_tree_ptr_->action_script().size() << std::endl;
 
+  // 自车和周车使用两套独立的前向仿真配置。
   GetSimParam(cfg_.sim().ego(), &ego_sim_param_);
   GetSimParam(cfg_.sim().agent(), &agent_sim_param_);
 
+  // 常规 RSS 用于软风险代价。
   rss_config_ = common::RssChecker::RssConfig(
       cfg_.safety().rss().response_time(),
       cfg_.safety().rss().longitudinal_acc_max(),
@@ -72,6 +86,7 @@ ErrorType EudmPlanner::Init(const std::string config) {
       cfg_.safety().rss().lateral_brake_max(),
       cfg_.safety().rss().lateral_miu());
 
+  // 自车作为前车时，用更严格参数约束后方来车。
   rss_config_strict_as_front_ = common::RssChecker::RssConfig(
       cfg_.safety().rss_strict_as_front().response_time(),
       cfg_.safety().rss_strict_as_front().longitudinal_acc_max(),
@@ -82,6 +97,7 @@ ErrorType EudmPlanner::Init(const std::string config) {
       cfg_.safety().rss_strict_as_front().lateral_brake_max(),
       cfg_.safety().rss_strict_as_front().lateral_miu());
 
+  // 自车作为后车时，用更严格参数约束前方车辆间距。
   rss_config_strict_as_rear_ = common::RssChecker::RssConfig(
       cfg_.safety().rss_strict_as_rear().response_time(),
       cfg_.safety().rss_strict_as_rear().longitudinal_acc_max(),
@@ -95,6 +111,7 @@ ErrorType EudmPlanner::Init(const std::string config) {
   return kSuccess;
 }
 
+// 把 DCP 的三类横向/纵向动作转换为 common 行为枚举。
 ErrorType EudmPlanner::TranslateDcpActionToLonLatBehavior(
     const DcpAction& action, LateralBehavior* lat,
     LongitudinalBehavior* lon) const {
@@ -139,6 +156,7 @@ ErrorType EudmPlanner::TranslateDcpActionToLonLatBehavior(
   return kSuccess;
 }
 
+// 提取序列首次换道时刻、长期横向行为，并识别换道后回到 LK 的取消序列。
 ErrorType EudmPlanner::ClassifyActionSeq(
     const std::vector<DcpAction>& action_seq, decimal_t* operation_at_seconds,
     common::LateralBehavior* lat_behavior, bool* is_cancel_operation) const {
@@ -146,6 +164,7 @@ ErrorType EudmPlanner::ClassifyActionSeq(
   decimal_t operation_at = 0.0;
   bool find_lat_active_behavior = false;
   *is_cancel_operation = false;
+  // 在第一个 LCL/LCR 出现前累计动作时长。
   for (const auto& action : action_seq) {
     if (!find_lat_active_behavior) {
       if (action.lat == DcpLatAction::kLaneChangeLeft) {
@@ -165,6 +184,7 @@ ErrorType EudmPlanner::ClassifyActionSeq(
     }
     duration += action.t;
   }
+  // 全程 LK 时把“操作时刻”放到规划时域之后一个普通 layer。
   if (!find_lat_active_behavior) {
     *operation_at_seconds = duration + cfg_.sim().duration().layer();
     *lat_behavior = common::LateralBehavior::kLaneKeeping;
@@ -173,6 +193,7 @@ ErrorType EudmPlanner::ClassifyActionSeq(
   return kSuccess;
 }
 
+// 为每条候选预分配独立结果槽位，供候选线程按 seq_id 写回。
 ErrorType EudmPlanner::PrepareMultiThreadContainers(const int n_sequence) {
   LOG(INFO) << "[Eudm][Process]Prepare multi-threading - " << n_sequence
             << " threads.";
@@ -209,6 +230,7 @@ ErrorType EudmPlanner::PrepareMultiThreadContainers(const int n_sequence) {
   return kSuccess;
 }
 
+// 把语义周车快照转换为固定 Lane 上传播的仿真 agent。
 ErrorType EudmPlanner::GetSurroundingForwardSimAgents(
     const common::SemanticVehicleSet& surrounding_semantic_vehicles,
     ForwardSimAgentSet* fsagents) const {
@@ -219,11 +241,11 @@ ErrorType EudmPlanner::GetSurroundingForwardSimAgents(
     fsagent.id = id;
     fsagent.vehicle = psv.second.vehicle;
 
-    // * lon
+    // 周车继承统一传播参数，再按当前加速度估计本时域期望速度。
     fsagent.sim_param = agent_sim_param_;
 
     common::State state = psv.second.vehicle.state();
-    // ~ If other vehicles' acc > 0, we assume constant velocity
+    // 非负加速度按当前速度匀速；负加速度外推到规划时域末端且不低于零。
     if (state.acceleration >= 0) {
       fsagent.sim_param.idm_param.kDesiredVelocity = state.velocity;
     } else {
@@ -232,14 +254,14 @@ ErrorType EudmPlanner::GetSurroundingForwardSimAgents(
       fsagent.sim_param.idm_param.kDesiredVelocity = est_vel;
     }
 
-    // * lat
+    // 保存语义预测，但后续传播使用当前 lane/stf，不在此处重采样行为。
     fsagent.lat_probs = psv.second.probs_lat_behaviors;
     fsagent.lat_behavior = psv.second.lat_behavior;
 
     fsagent.lane = psv.second.lane;
     fsagent.stf = common::StateTransformer(fsagent.lane);
 
-    // * other
+    // 横向命中范围控制前车搜索的 Lane 邻域宽度。
     fsagent.lat_range = cfg_.sim().agent().cooperative_lat_range();
 
     fsagents->forward_sim_agents.insert(std::make_pair(id, fsagent));
@@ -248,8 +270,9 @@ ErrorType EudmPlanner::GetSurroundingForwardSimAgents(
   return kSuccess;
 }
 
+// 获取关键周车，为每条 DCP 候选创建线程，汇总仿真状态并选择最低代价序列。
 ErrorType EudmPlanner::RunEudm() {
-  // * get relevant information
+  // 从语义地图读取带预测行为和参考 Lane 的关键周车。
   common::SemanticVehicleSet surrounding_semantic_vehicles;
   if (map_itf_->GetKeySemanticVehicles(&surrounding_semantic_vehicles) !=
       kSuccess) {
@@ -264,12 +287,12 @@ ErrorType EudmPlanner::RunEudm() {
   auto action_script = dcp_tree_ptr_->action_script();
   int n_sequence = action_script.size();
 
-  // * prepare for multi-threading
+  // 线程数与候选数相同，结果容器在启动线程前固定尺寸。
   std::vector<std::thread> thread_set(n_sequence);
   PrepareMultiThreadContainers(n_sequence);
 
-  // * threading
-  // TODO(@lu.zhang) Use thread pool?
+  // 每条候选独立复制输入并执行前向仿真；当前没有线程池或并发上限。
+  // TODO(@lu.zhang) 使用线程池复用工作线程。
   TicToc timer;
   for (int i = 0; i < n_sequence; ++i) {
     thread_set[i] =
@@ -282,7 +305,7 @@ ErrorType EudmPlanner::RunEudm() {
 
   LOG(INFO) << "[Eudm][Process]Multi-thread forward simulation finished!";
 
-  // * finish multi-threading, summary simulation results
+  // 汇总成功候选；只要至少一条成功就进入代价选择。
   bool sim_success = false;
   int num_valid_behaviors = 0;
   for (int i = 0; i < static_cast<int>(sim_res_.size()); ++i) {
@@ -292,6 +315,7 @@ ErrorType EudmPlanner::RunEudm() {
     }
   }
 
+  // 输出每条脚本的 M/A/D、K/L/R、有效性、风险、总代价和逐层分项。
   for (int i = 0; i < n_sequence; ++i) {
     std::ostringstream line_info;
     line_info << "[Eudm][Result]" << i << " [";
@@ -328,7 +352,7 @@ ErrorType EudmPlanner::RunEudm() {
     return kWrongStatus;
   }
 
-  // * evaluate
+  // 在仿真成功的候选中选择累计代价最小者。
   if (EvaluateMultiThreadSimResults(&winner_id_, &winner_score_) != kSuccess) {
     LOG(ERROR)
         << "[Eudm][Fatal]fail to evaluate multi-thread sim results. Exit";
@@ -849,9 +873,10 @@ bool EudmPlanner::CheckIfLateralActionFinished(
   }
 }
 
+// 执行 EUDM 单周期：读取输入、建立 RSS 参考 Lane、预删非法脚本、仿真并记录胜者。
 ErrorType EudmPlanner::RunOnce() {
   TicToc timer_runonce;
-  // * Get current nearest lane id
+  // 地图接口和自车是本周期的首要前置条件。
   if (!map_itf_) {
     LOG(ERROR) << "[Eudm]map interface not initialized. Exit";
     return kWrongStatus;
@@ -893,6 +918,7 @@ ErrorType EudmPlanner::RunOnce() {
                << lc_info_.left_solid_lane << "," << lc_info_.right_solid_lane;
   ego_lane_id_ = ego_lane_id_by_pos;
 
+  // 构造固定前后 130 m 的 LK 参考 Lane，供本周期 RSS 评价使用。
   const decimal_t forward_rss_check_range = 130.0;
   const decimal_t backward_rss_check_range = 130.0;
   const decimal_t forward_lane_len = forward_rss_check_range;
@@ -904,10 +930,12 @@ ErrorType EudmPlanner::RunOnce() {
     LOG(ERROR) << "[Eudm]No Rss lane available. Rss disabled";
   }
 
+  // 查询成功或历史 rss_lane_ 仍有效时刷新 Frenet 变换。
   if (rss_lane_.IsValid()) {
     rss_stf_ = common::StateTransformer(rss_lane_);
   }
 
+  // 预删相邻层直接从 LCL 切到 LCR 或反向切换的脚本。
   pre_deleted_seq_ids_.clear();
   int n_sequence = dcp_tree_ptr_->action_script().size();
   for (int i = 0; i < n_sequence; i++) {
@@ -923,6 +951,7 @@ ErrorType EudmPlanner::RunOnce() {
     }
   }
 
+  // 执行并行候选仿真与最小代价选择。
   TicToc timer;
   if (RunEudm() != kSuccess) {
     LOG(ERROR) << std::fixed << std::setprecision(4)
@@ -930,6 +959,7 @@ ErrorType EudmPlanner::RunOnce() {
                << " time cost " << timer.toc() << " ms.";
     return kWrongStatus;
   }
+  // 记录胜出脚本的人类可读动作缩写和本周期耗时。
   auto action_script = dcp_tree_ptr_->action_script();
   std::ostringstream line_info;
   line_info << "[Eudm]SUCCESS id:" << winner_id_ << " [";
@@ -1480,6 +1510,7 @@ ErrorType EudmPlanner::EgoAgentForwardSim(
   return kSuccess;
 }
 
+// 根据当前 Lane 是否落在保持/左换/右换候选集中推断横向行为。
 ErrorType EudmPlanner::JudgeBehaviorByLaneId(
     const int ego_lane_id_by_pos, LateralBehavior* behavior_by_lane_id) {
   if (ego_lane_id_by_pos == ego_lane_id_) {
@@ -1515,6 +1546,7 @@ ErrorType EudmPlanner::JudgeBehaviorByLaneId(
   return kSuccess;
 }
 
+// 更新自车 Lane ID；潜在 Lane 集合的同步刷新当前已被注释。
 ErrorType EudmPlanner::UpdateEgoLaneId(const int new_ego_lane_id) {
   ego_lane_id_ = new_ego_lane_id;
   // GetPotentialLaneIds(ego_lane_id_, common::LateralBehavior::kLaneKeeping,
@@ -1527,6 +1559,7 @@ ErrorType EudmPlanner::UpdateEgoLaneId(const int new_ego_lane_id) {
   return kSuccess;
 }
 
+// 由源 Lane 和横向行为构造可能到达的相邻 Lane/child Lane 集合。
 ErrorType EudmPlanner::GetPotentialLaneIds(
     const int source_lane_id, const LateralBehavior& beh,
     std::vector<int>* candidate_lane_ids) const {
@@ -1552,28 +1585,36 @@ ErrorType EudmPlanner::GetPotentialLaneIds(
   return kSuccess;
 }
 
+// 保存由 EudmManager 持有的非拥有地图接口指针。
 void EudmPlanner::set_map_interface(EudmPlannerMapItf* itf) { map_itf_ = itf; }
 
+// 把用户期望速度下限截断为零。
 void EudmPlanner::set_desired_velocity(const decimal_t desired_vel) {
   desired_velocity_ = std::max(0.0, desired_vel);
 }
 
+// 按值缓存本周期换道约束和推荐信息。
 void EudmPlanner::set_lane_change_info(const LaneChangeInfo& lc_info) {
   lc_info_ = lc_info;
 }
 
+// 返回当前用户期望速度。
 decimal_t EudmPlanner::desired_velocity() const { return desired_velocity_; }
 
+// 返回本周期胜出候选索引。
 int EudmPlanner::winner_id() const { return winner_id_; }
 
+// 返回最近一次成功 RunOnce 的总耗时。
 decimal_t EudmPlanner::time_cost() const { return time_cost_; }
 
+// 用 manager 给出的 ongoing action 重建 DCP 候选并刷新规划时域。
 void EudmPlanner::UpdateDcpTree(const DcpAction& ongoing_action) {
   dcp_tree_ptr_->set_ongoing_action(ongoing_action);
   dcp_tree_ptr_->UpdateScript();
   sim_time_total_ = dcp_tree_ptr_->planning_horizon();
 }
 
+// 返回非拥有地图接口指针。
 EudmPlannerMapItf* EudmPlanner::map_itf() const { return map_itf_; }
 
 }  // namespace planning
