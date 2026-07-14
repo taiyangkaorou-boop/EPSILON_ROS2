@@ -1,7 +1,7 @@
 /**
  * @file semantics.cc
  * @author HKUST Aerial Robotics Group
- * @brief
+ * @brief 实现语义数据对象的几何转换、调试输出、栅格访问和交通信号操作。
  * @version 0.1
  * @date 2019-03-17
  *
@@ -12,6 +12,7 @@
 namespace common {
 
 void VehicleParam::print() const {
+  // 按配置字段逐项输出，便于确认车辆模型与实验记录是否一致。
   printf("VehicleParam:\n");
   printf(" -- width:\t %lf.\n", width_);
   printf(" -- length:\t %lf.\n", length_);
@@ -24,6 +25,7 @@ void VehicleParam::print() const {
   printf(" -- max_lateral_acc:\t %lf.\n", max_lateral_acc_);
 }
 
+// 构造函数仅组合 ID、类别、参数和状态，不执行几何或动力学校验。
 Vehicle::Vehicle() {}
 
 Vehicle::Vehicle(const VehicleParam &param, const State &state)
@@ -37,10 +39,12 @@ Vehicle::Vehicle(const int &id, const std::string &subclass,
     : id_(id), subclass_(subclass), param_(param), state_(state) {}
 
 Vec3f Vehicle::Ret3DofState() const {
+  // State 的位置参考点为后轴中心，因此直接读取位置和航向。
   return Vec3f(state_.vec_position(0), state_.vec_position(1), state_.angle);
 }
 
 ErrorType Vehicle::Ret3DofStateAtGeometryCenter(Vec3f *state) const {
+  // 沿车辆纵向轴前移 d_cr，将后轴中心坐标转换为车身几何中心坐标。
   decimal_t cos_theta = cos(state_.angle);
   decimal_t sin_theta = sin(state_.angle);
   decimal_t x = state_.vec_position(0) + param_.d_cr() * cos_theta;
@@ -52,6 +56,7 @@ ErrorType Vehicle::Ret3DofStateAtGeometryCenter(Vec3f *state) const {
 }
 
 void Vehicle::print() const {
+  // Vehicle 自身输出标识，参数和运动状态交给各自对象输出。
   printf("\nVehicle:\n");
   printf(" -- ID:\t%d\n", id_);
   printf(" -- Subclass:\t%s\n", subclass_.c_str());
@@ -60,6 +65,7 @@ void Vehicle::print() const {
 }
 
 OrientedBoundingBox2D Vehicle::RetOrientedBoundingBox() const {
+  // OBB 必须以几何中心为中心，而不是直接使用 State 的后轴中心位置。
   OrientedBoundingBox2D obb;
   double cos_theta = cos(state_.angle);
   double sin_theta = sin(state_.angle);
@@ -72,11 +78,13 @@ OrientedBoundingBox2D Vehicle::RetOrientedBoundingBox() const {
 }
 
 ErrorType Vehicle::RetVehicleVertices(vec_E<Vec2f> *vertices) const {
+  // 统一委托给 SemanticsUtils，避免多处重复车身角点计算公式。
   SemanticsUtils::GetVehicleVertices(param_, state_, vertices);
   return kSuccess;
 }
 
 ErrorType Vehicle::RetBumperVertices(std::array<Vec2f, 2> *vertices) const {
+  // 先求几何中心，再沿航向正负方向移动半车长得到前后中点。
   decimal_t cos_theta = cos(state_.angle);
   decimal_t sin_theta = sin(state_.angle);
 
@@ -93,6 +101,7 @@ ErrorType Vehicle::RetBumperVertices(std::array<Vec2f, 2> *vertices) const {
 }
 
 void VehicleSet::print() const {
+  // unordered_map 不保证输出顺序，本函数仅用于人工调试而非确定性日志比较。
   printf("Vehicle Set Info:\n");
   for (auto iter = vehicles.begin(); iter != vehicles.end(); ++iter) {
     printf("\n -- ID. %d:\n", iter->first);
@@ -101,11 +110,13 @@ void VehicleSet::print() const {
   printf("\n");
 }
 
+// 默认构造保持 is_openloop=false，因此 acc/steer_rate 为有效控制表示。
 VehicleControlSignal::VehicleControlSignal() {}
 
 VehicleControlSignal::VehicleControlSignal(double acc, double steer_rate)
     : acc(acc), steer_rate(steer_rate), is_openloop(false) {}
 
+// 期望状态构造函数显式切换为开环模式，并将闭环控制量清零。
 VehicleControlSignal::VehicleControlSignal(common::State state)
     : acc(0.0), steer_rate(0.0), is_openloop(true), state(state) {}
 

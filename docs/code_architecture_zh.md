@@ -61,7 +61,9 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.1 系统入口、launch 和辅助工具。
 - [x] M0.2a1 `core/common` 通用配置、宏、计时、线程池、色图与工具函数。
 - [x] M0.2a2 `core/common` 几何类型与碰撞/投影工具。
-- [ ] M0.2a3 `core/common` 领域语义类型。
+- [x] M0.2a3a `semantics` 车辆、行为概率、语义车辆与控制信号。
+- [ ] M0.2a3b `semantics` 栅格地图、车道、障碍物与 KD-tree 适配。
+- [ ] M0.2a3c `semantics` SSC cube/corridor、交通信号与枚举工具。
 - [ ] M0.2a4 `core/common` 状态与车道类型。
 - [ ] M0.2b `core/common` 数学、样条、轨迹与圆弧。
 - [ ] M0.2c `core/common` 求解器、安全模型、车辆行为模型与可视化。
@@ -100,3 +102,19 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 `CheckIfAxisAlignedCubeNdIntersect` 专门检测表面穿越，因此完整包含时返回 false。这些
 判定语义会直接影响后续安全验证，修改时必须通过独立任务和回归场景进行，而不能在
 注释任务中顺带改变。
+
+## 7. M0.2a3a：车辆、行为与控制语义
+
+| 组件 | 职责与边界 |
+|---|---|
+| `VehicleParam` | 保存车辆尺寸、轴距、悬长、转向/加速度限制；不验证参数物理合理性 |
+| `Vehicle` | 组合单时刻状态与车辆参数，并提供后轴中心到几何中心、OBB 和车身顶点转换 |
+| `LongitudinalBehavior` / `LateralBehavior` | 行为规划、预测与语义地图共享的离散意图枚举 |
+| `ProbDistOfLatBehaviors` | 保存 LK/LCL/LCR 概率；有效标记和归一化必须由上游显式维护 |
+| `SemanticBehavior` | 保存行为层 winner、参考车道、自车/周车 rollout 和关联状态 |
+| `SemanticVehicle` | 在原始车辆上附加最近车道、沿车道位置和横向行为预测 |
+| `VehicleControlSignal` | 二选一表达开环期望状态或闭环加速度/转向率，禁止同时消费两种表示 |
+
+这里的 `ProbDistOfLatBehaviors` 是当前 baseline 将不确定性压缩为有限横向意图的主要
+接口。BR-EUDM 后续会通过 adapter 扩展跨周期 intent/style belief，但必须保持旧接口
+可配置兼容，不能让 MPDM/EUDM 对照因消息结构差异失去公平性。

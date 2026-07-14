@@ -1,7 +1,7 @@
 /**
  * @file semantics.h
  * @author HKUST Aerial Robotics Group
- * @brief
+ * @brief 定义车辆、行为、地图、障碍物、SSC 走廊和交通信号等跨模块领域语义。
  * @version 0.1
  * @date 2019-03-17
  *
@@ -29,40 +29,65 @@
 
 namespace common {
 
+/**
+ * @brief 车辆几何尺寸、轴距和动力学限制参数。
+ *
+ * 状态坐标默认位于后轴中心，d_cr 描述后轴中心到车辆几何中心的纵向距离。
+ * 本类只保存参数，不负责验证物理合理性或单位一致性。
+ */
 class VehicleParam {
  public:
+  /// 返回车身宽度，单位为米。
   inline double width() const { return width_; }
+  /// 返回车身总长度，单位为米。
   inline double length() const { return length_; }
+  /// 返回前后轴轴距，单位为米。
   inline double wheel_base() const { return wheel_base_; }
+  /// 返回前轴到车头的前悬长度，单位为米。
   inline double front_suspension() const { return front_suspension_; }
+  /// 返回后轴到车尾的后悬长度，单位为米。
   inline double rear_suspension() const { return rear_suspension_; }
+  /// 返回最大转向角；现有配置约定由调用模块解释角度单位。
   inline double max_steering_angle() const { return max_steering_angle_; }
+  /// 返回最大纵向加速度绝对限制，单位为 m/s^2。
   inline double max_longitudinal_acc() const { return max_longitudinal_acc_; }
+  /// 返回最大横向加速度绝对限制，单位为 m/s^2。
   inline double max_lateral_acc() const { return max_lateral_acc_; }
+  /// 返回后轴中心到车辆几何中心的纵向距离，单位为米。
   inline double d_cr() const { return d_cr_; }
 
+  /// 设置车身宽度，不执行范围校验。
   inline void set_width(const double val) { width_ = val; }
+  /// 设置车身总长度，不执行范围校验。
   inline void set_length(const double val) { length_ = val; }
+  /// 设置轴距，不执行范围校验。
   inline void set_wheel_base(const double val) { wheel_base_ = val; }
+  /// 设置前悬长度。
   inline void set_front_suspension(const double val) {
     front_suspension_ = val;
   }
+  /// 设置后悬长度。
   inline void set_rear_suspension(const double val) { rear_suspension_ = val; }
+  /// 设置最大转向角。
   inline void set_max_steering_angle(const double val) {
     max_steering_angle_ = val;
   }
+  /// 设置最大纵向加速度限制。
   inline void set_max_longitudinal_acc(const double val) {
     max_longitudinal_acc_ = val;
   }
+  /// 设置最大横向加速度限制。
   inline void set_max_lateral_acc(const double val) { max_lateral_acc_ = val; }
+  /// 设置后轴中心到几何中心的距离。
   inline void set_d_cr(const double val) { d_cr_ = val; }
 
   /**
-   * @brief Print info
+   * @brief 输出全部车辆参数，供启动配置和调试核对。
    */
   void print() const;
 
  private:
+  // 默认值对应项目演示车辆；研究实验应通过配置显式记录实际参数。
   double width_ = 1.90;
   double length_ = 4.88;
   double wheel_base_ = 2.85;
@@ -73,71 +98,91 @@ class VehicleParam {
   double max_longitudinal_acc_ = 2.0;
   double max_lateral_acc_ = 2.0;
 
-  double d_cr_ = 1.34;  // length between geometry center and rear axle
+  double d_cr_ = 1.34;  // 车辆几何中心相对后轴中心的纵向偏移。
 };
 
+/**
+ * @brief 将车辆标识、类别、物理参数和某一时刻运动状态组合为统一对象。
+ *
+ * Vehicle 不拥有轨迹历史；每个实例表示单个时刻/采样点。其 State 位置以
+ * 后轴中心为参考，几何碰撞接口会使用 d_cr 转换到车身几何中心。
+ */
 class Vehicle {
  public:
+  /// 构造 ID 无效、参数和状态为默认值的车辆。
   Vehicle();
+  /// 使用车辆参数与状态构造未绑定 ID 的车辆。
   Vehicle(const VehicleParam &param, const State &state);
+  /// 使用 ID、参数与状态构造车辆。
   Vehicle(const int &id, const VehicleParam &param, const State &state);
+  /// 使用 ID、子类别、参数与状态构造车辆。
   Vehicle(const int &id, const std::string &subclass, const VehicleParam &param,
           const State &state);
 
+  /// 返回车辆唯一 ID。
   inline int id() const { return id_; }
+  /// 返回车辆子类别字符串，例如具体车型类别。
   inline std::string subclass() const { return subclass_; }
+  /// 按值返回车辆参数副本。
   inline VehicleParam param() const { return param_; }
+  /// 按值返回车辆状态副本。
   inline State state() const { return state_; }
+  /// 返回车辆主类型字符串。
   inline std::string type() const { return type_; }
 
+  /// 设置车辆唯一 ID。
   inline void set_id(const int &id) { id_ = id; }
+  /// 设置车辆子类别。
   inline void set_subclass(const std::string &subclass) {
     subclass_ = subclass;
   }
+  /// 设置车辆主类型。
   inline void set_type(const std::string &type) { type_ = type; }
+  /// 替换车辆参数。
   inline void set_param(const VehicleParam &in) { param_ = in; }
+  /// 替换车辆瞬时状态。
   inline void set_state(const State &in) { state_ = in; }
 
   /**
-   * @brief Get 3-DoF vehicle state at center of rear axle, x-y-yaw
+   * @brief 返回后轴中心处的二维位姿 `[x, y, yaw]`。
    *
-   * @return Vec3f 3-dof vehicle state
+   * @return Vec3f 后轴中心世界坐标和航向角。
    */
   Vec3f Ret3DofState() const;
 
   /**
-   * @brief Get 2D OBB of the vehicle
+   * @brief 返回以车身几何中心为中心的二维有向包围盒。
    *
-   * @return OrientedBoundingBox2D OBB
+   * @return OrientedBoundingBox2D 使用车辆宽度、长度和当前航向构造的 OBB。
    */
   OrientedBoundingBox2D RetOrientedBoundingBox() const;
 
   /**
-   * @brief Return color in jet colormap using mapping function
+   * @brief 计算车身矩形的四个世界坐标顶点。
    *
-   * @param vertices pointer of vertice container
-   * @return ErrorType
+   * @param vertices 输出顶点容器，由 SemanticsUtils 按固定环绕顺序填充。
+   * @return ErrorType 当前实现固定返回 kSuccess。
    */
   ErrorType RetVehicleVertices(vec_E<Vec2f> *vertices) const;
 
   /**
-   * @brief Return front and rear points on longitudinal axle
+   * @brief 返回车身纵向中轴线上的后保险杠点和前保险杠点。
    *
-   * @param vertices
-   * @return ErrorType
+   * @param vertices 输出长度为 2 的数组，索引 0 为后端点、1 为前端点。
+   * @return ErrorType 当前实现固定返回 kSuccess。
    */
   ErrorType RetBumperVertices(std::array<Vec2f, 2> *vertices) const;
 
   /**
-   * @brief Return 3-DoF state at geometry center, x-y-yaw
+   * @brief 将后轴中心状态转换为几何中心位姿 `[x, y, yaw]`。
    *
-   * @param state pointer of state
-   * @return ErrorType
+   * @param state 输出三自由度位姿。
+   * @return ErrorType 当前实现固定返回 kSuccess。
    */
   ErrorType Ret3DofStateAtGeometryCenter(Vec3f *state) const;
 
   /**
-   * @brief Print info
+   * @brief 输出车辆 ID、子类别、参数和状态，供调试使用。
    */
   void print() const;
 
@@ -149,6 +194,7 @@ class Vehicle {
   State state_;
 };
 
+/// 行为层使用的纵向离散意图。
 enum class LongitudinalBehavior {
   kMaintain = 0,
   kAccelerate,
@@ -156,6 +202,7 @@ enum class LongitudinalBehavior {
   kStopping
 };
 
+/// 行为层和预测层共享的横向离散意图。
 enum class LateralBehavior {
   kUndefined = 0,
   kLaneKeeping,
@@ -163,13 +210,21 @@ enum class LateralBehavior {
   kLaneChangeRight,
 };
 
+/// 使 enum class 可作为 unordered_map 键的哈希适配器。
 struct EnumClassHash {
+  /// 将枚举底层值转换为 size_t 哈希值。
   template <typename T>
   std::size_t operator()(T t) const {
     return static_cast<std::size_t>(t);
   }
 };
 
+/**
+ * @brief 三种有效横向行为的离散概率分布。
+ *
+ * is_valid 与数值归一化是两个独立条件；设置条目不会自动归一化，也不会自动把
+ * is_valid 设为 true。该结构是后续 belief 改造必须兼容的 baseline 概率接口。
+ */
 struct ProbDistOfLatBehaviors {
   bool is_valid = false;
   std::unordered_map<LateralBehavior, decimal_t, EnumClassHash> probs{
@@ -177,10 +232,12 @@ struct ProbDistOfLatBehaviors {
       {common::LateralBehavior::kLaneChangeRight, 0.0},
       {common::LateralBehavior::kLaneKeeping, 0.0}};
 
+  /// 写入指定横向行为的概率，不执行截断或归一化。
   void SetEntry(const LateralBehavior &beh, const decimal_t &val) {
     probs[beh] = val;
   }
 
+  /// 检查全部条目之和是否在 kEPS 容差内等于 1。
   bool CheckIfNormalized() const {
     decimal_t sum = 0.0;
     for (const auto &entry : probs) {
@@ -193,6 +250,7 @@ struct ProbDistOfLatBehaviors {
     }
   }
 
+  /// 在分布有效时返回概率最大的横向行为；并列结果受哈希遍历顺序影响。
   bool GetMaxProbBehavior(LateralBehavior *beh) const {
     if (!is_valid) return false;
 
@@ -210,11 +268,11 @@ struct ProbDistOfLatBehaviors {
 };
 
 /**
- * @brief Semantic behavior is a collection of different behaviors
- * to describe a complex intention.
- * @param ref_lane, may not be a lane existed in the physical
- * world, instead, it may be reconstructed using the physical
- * lanes as well as the discret behavior etc.
+ * @brief 行为层输出的复合语义决策及其前向仿真证据。
+ *
+ * ref_lane 可以是由物理车道和离散换道行为重建的参考车道，不要求对应地图中的
+ * 单一原始 lane。forward_trajs/forward_behaviors/surround_trajs 保存候选策略评估时
+ * 的自车与周车 rollout，state 保存与该语义行为关联的状态。
  */
 
 struct SemanticBehavior {
@@ -229,48 +287,52 @@ struct SemanticBehavior {
 
   State state;
 
+  /// 默认构造为车道保持和纵向维持。
   SemanticBehavior() {
     lat_behavior = LateralBehavior::kLaneKeeping;
     lon_behavior = LongitudinalBehavior::kMaintain;
   }
+  /// 使用指定横向行为构造；其余成员沿用各自默认值。
   SemanticBehavior(const LateralBehavior &beh) : lat_behavior(beh) {}
 };
 
 /**
- * @brief Vehicle with semantic info
+ * @brief 在 Vehicle 基础上附加车道匹配和横向行为预测信息。
  */
 struct SemanticVehicle {
-  // * vehicle
+  // 原始车辆参数与瞬时运动状态。
   Vehicle vehicle;
 
-  // * nearest lane info
+  // 最近车道匹配结果；负值表示尚未完成有效匹配。
   int nearest_lane_id{kInvalidLaneId};
   decimal_t dist_to_lane{-1.0};
   decimal_t arc_len_onlane{-1.0};
 
-  // * prediction
+  // 横向行为离散概率分布。
   ProbDistOfLatBehaviors probs_lat_behaviors;
 
-  // * argmax behavior
+  // 当前选取的最大概率行为及其对应参考车道。
   LateralBehavior lat_behavior{LateralBehavior::kUndefined};
   Lane lane;
 };
 
+/// 以车辆 ID 为键的语义车辆集合。
 struct SemanticVehicleSet {
   std::unordered_map<int, SemanticVehicle> semantic_vehicles;
 };
 
+/// 以车辆 ID 为键的原始车辆集合。
 struct VehicleSet {
   std::unordered_map<int, Vehicle> vehicles;
 
   /**
-   * @brief Print info
+   * @brief 逐车输出 ID 和车辆详细信息。
    */
   void print() const;
 };
 
 /**
- * @brief Vehicle info under Frenet-frame
+ * @brief Frenet 坐标系中的车辆状态及其车身顶点。
  */
 struct FsVehicle {
   FrenetState frenet_state;
@@ -278,9 +340,10 @@ struct FsVehicle {
 };
 
 /**
- * @brief Vehicle control signal, 2 modes embedded
- * @brief open-loop: use desired state
- * @brief closed-loop: use longitudinal acc and steering rate
+ * @brief 同时支持开环期望状态和闭环加速度/转向率的车辆控制信号。
+ *
+ * is_openloop 为 true 时消费 state；为 false 时消费 acc 和 steer_rate。调用方必须
+ * 按模式读取字段，不能把两个控制表示同时叠加。
  */
 struct VehicleControlSignal {
   double acc = 0.0;
@@ -289,26 +352,27 @@ struct VehicleControlSignal {
   common::State state;
 
   /**
-   * @brief Default constructor
+   * @brief 构造零加速度、零转向率的闭环控制信号。
    */
   VehicleControlSignal();
 
   /**
-   * @brief Construct a new Vehicle Control Signal object
+   * @brief 构造闭环控制信号。
    *
-   * @param acc longitudinal acc, m/s^2
-   * @param steer_rate steering rate, rad/s
+   * @param acc 纵向加速度，单位 m/s^2。
+   * @param steer_rate 转向角速度，单位 rad/s。
    */
   VehicleControlSignal(double acc, double steer_rate);
 
   /**
-   * @brief Construct a new Vehicle Control Signal object
+   * @brief 构造使用期望状态的开环控制信号。
    *
-   * @param state desired state
+   * @param state 期望车辆状态。
    */
   VehicleControlSignal(common::State state);
 };
 
+/// 以车辆 ID 为键的控制信号集合。
 struct VehicleControlSignalSet {
   std::unordered_map<int, VehicleControlSignal> signal_set;
 };
