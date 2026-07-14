@@ -113,7 +113,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [ ] M0.4b SSC 地图、规划器、ROS/可视化与配置。
 - [x] M0.4b1 SSC 地图抽象接口与 SemanticMapManager 适配器。
 - [x] M0.4b2 SSC 时空占用栅格与 corridor 地图。
-- [ ] M0.4b3 SSC 轨迹规划与优化主流程。
+- [x] M0.4b3 SSC 轨迹规划与优化主流程。
 - [ ] M0.4b4 SSC ROS2 服务端与可视化。
 - [ ] M0.4b5 SSC proto、配置、RViz 与构建元数据。
 - [ ] M0.4c 物理仿真器与 arena loader。
@@ -1173,3 +1173,50 @@ CorridorRelaxation 主流程均未使用，六方向参数实际只有前五项�
 扫掠占用和 uncertainty inflation 构图，统一候选级 Status/下标对齐，并用有终止证明的各向
 膨胀与可达集约束替代经验补偿；需覆盖非零起始时间、空/稀疏预测、边界 seed、窄车、零步长、
 无效 GridMap 查询和多候选部分失败测试。
+
+## 56. M0.4b3：SSC 轨迹规划、Bezier QP 与行为选择
+
+- Init 从 protobuf 文本读取 Planner/MapConfig，把地图尺寸、分辨率、动力学界和六方向膨胀
+  参数映射到 SscMap；最小纵向速度被提升到 velocity singularity epsilon，随后 new 内部
+  SscMap。Name 固定返回 `ssc_planner`；
+- RunOnce 从同一地图快照取得时间、自车、行为参考 Lane、离散行为、障碍地图/点和多候选
+  自车/周车 rollout。显式 set_initial_state 只覆盖下一轮起点，否则使用自车当前状态；速度
+  高于 low-speed threshold 时使用 s/d 独立 Bezier 轨迹，低速使用 Frenet primitive；
+- StateTransformForInputData 按“起始自车—候选自车 rollout—候选周车 rollout—静态障碍点”
+  顺序扁平化全部状态和车身顶点，经同一参考 Lane 的 StateTransformer 批量投影，再按状态
+  offset 和统一顶点数恢复 FsVehicle 层级。OpenMP 四线程路径由编译宏控制，当前默认关闭；
+- 每个行为用专属周车 rollout 重新构造 SSC 占用，再沿对应自车 rollout 生成一个 corridor。
+  全部离散 corridor 转为连续 cube 后，RunQpOptimization 为每个有效候选建立 s/d 起点位置、
+  速度、加速度约束，以及终点位置/速度约束；完整 rollout 的时间和 s/d 点作为 proximity
+  参考，交给 `SplineGenerator<5,2>` 生成五阶二维 Bezier spline；
+- 低速模式无论 Bezier 是否成功，都会调用 FrenetPrimitive::Connect 连接初末 Frenet 状态；
+  正常速度则丢弃 QP 失败候选。成功候选的 spline、primitive、corridor、参考状态和横向行为
+  以相同下标保存；
+- 最终选择优先匹配行为层发布的 ego_behavior；没有精确匹配时只尝试 LaneKeeping。trajectory
+  getter 按速度模式在堆上复制并返回 FrenetPrimitiveTrajectory 或 FrenetBezierTrajectory。
+
+已确认的后续修复/验证点：默认构造不初始化 map_itf_/p_ssc_map_，RunOnce 开头即解引用
+map_itf_，也从不检查 map_valid_、接口 IsValid 或是否 Init；Init 用 new 分配 SscMap，但类无
+析构且重复 Init 不释放旧对象。多个 const getter 返回可写裸指针或深拷贝大型 rollout/
+corridor，`sur_vehicle_trajs_fs_` 从未填充。ReadConfig 不检查 open 和 TextFormat::Parse 结果，
+FileInputStream 没有显式关闭 fd；配置缺字段只 assert，Release 下可能继续使用无效配置，函数
+仍固定成功，Init 又忽略其返回值。RunOnce 的 static timer 不是多实例/多线程安全；显式起点
+不校验与地图时间/位置的一致性。读取的二维 obstacle GridMap 在规划中完全未使用；Reset 和
+多处下游错误被忽略。行为、自车轨迹、周车轨迹及转换后容器只靠隐含下标约定，循环直接用
+behavior 数量索引，适配器数据错配时可越界。`is_fitting_only` 会完全跳过障碍填图；正常模式
+又为节省时间禁用 ego footprint inflation，使 corridor 只约束参考点而不保证完整自车车身
+避碰，是当前最严重的安全缺口。最终 ValidateTrajectory 被 `#if 0` 完全关闭。
+批量投影假设所有车辆顶点数等于起始自车 num_v，且总动态点数严格等于状态数×num_v；任何
+顶点生成/投影失败都会破坏拆包 offset。单线程转换忽略全部 ErrorType，可能写入未定义 Eigen
+点；OpenMP 路径状态失败只保留时间戳、点失败同样被吞掉，却统一返回成功。空候选在打包时
+跳过，拆包时仅 assert；Release 下会生成空 Frenet rollout，QP 随后对 `back()` 和 `[-1]`
+访问。RunQpOptimization 只检查 cube 数与 behavior 数，不检查 validity、forward_trajs_fs 或
+原始 rollout 数量；它强改最后 cube 的 t_ub，却用浮点 `!=` 要求相邻时间精确相等，只检查
+时间连接，不检查 cube 时长、s/d 交叠、起终状态、动力学可达或参考时间单调。低速 primitive
+Connect 返回值被忽略，候选仍保存默认 Bezier；函数即使零个有效候选也返回成功。行为选择
+对重复行为取最后项、不按代价排序；唯一回退是 LaneKeeping，且回退后不更新公开行为语义。
+被禁用的 Validate 也只核对起点位置/速度和 `|curvature|<=0.33`，不检查碰撞、corridor、时间、
+有限性、速度/加速度/jerk、终端偏差或车辆完整 footprint。M1 应以显式生命周期和状态机封装
+Init/Map/Run，严格验证候选 schema 与转换 offset，传播配置/投影/求解错误，恢复连续车身
+碰撞和完整轨迹验证；候选选择需返回真实执行行为并按安全、可行性、舒适性和参考偏差排序，
+同时加入空候选、错配容器、投影失败、QP infeasible、低速切换、浮点时间容差和降级测试。
