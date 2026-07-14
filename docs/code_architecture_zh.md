@@ -135,6 +135,9 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.5a3c EUDM 场景/动作层/积分步前向仿真。
 - [x] M0.5a3d EUDM 代价、RSS 与严格安全评价。
 - [ ] M0.5a4 EUDM manager、ROS server 与 visualizer。
+- [x] M0.5a4a EUDM manager 公共状态、快照与所有权。
+- [ ] M0.5a4b EUDM manager 动作续接、HMI 状态机与重选实现。
+- [ ] M0.5a4c EUDM ROS2 server 与 visualizer。
 - [ ] M0.5a5 EUDM proto、CMake 与 package 元数据。
 - [ ] M0.5b ai_agent planner 与 launch/build。
 - [ ] M0.5c route_planner、vehicle_msgs 与公共 Planner 接口遗漏。
@@ -1738,3 +1741,29 @@ M1 应先建立 dt-invariant 的积分代价、连续碰撞/自适应采样、�
 
 至此 M0.5a3 已完成：EUDM 规划核心的公共状态、周期编排、分层前向仿真、硬安全和软代价链均已
 建立中文职责与静态风险索引。后续 M0.5a4 转向 EudmManager、ROS2 server 和 visualizer。
+
+## 72. M0.5a4a：EUDM manager 公共状态、快照与所有权
+
+- EudmManager 拥有 EudmPlanner 和 EudmPlannerMapAdapter，在 planner 的单周期候选搜索外维护
+  跨周期动作续接、用户 Task、stick/active 换道状态、主动提案和最终结果快照；
+- ReplanningContext 保存最终脚本起点时间和动作序列，下一周期按经过时间恢复 ongoing action；
+  ActivateLaneChangeRequest 用于多帧积累主动换道方向/Lane/操作时刻一致性，达到阈值后生成
+  LaneChangeProposal；LaneChangeContext 保存当前任务是否完成、缓存触发、绝对操作时刻和来源；
+- Snapshot 深拷贝 planner 的原始/重选 winner、动作脚本、有效/风险标志、分项/最终代价、自车与
+  周车轨迹、逐层行为，并增加最终高质量参考 Lane、地图时间戳和计算耗时；
+- Run 的公开契约是 Prepare -> planner RunOnce -> SaveSnapshot -> ReselectByContext -> 拟合参考
+  Lane -> 更新上下文/提案；ConstructBehavior 只输出 processed winner 的第一层行为和单条轨迹。
+
+已确认的后续修复/验证点：ReplanningContext::seq_start_time、ActivateLaneChangeRequest 三个时间/ID、
+LaneChangeProposal::ego_lane_id、LaneChangeContext::type、Snapshot 两个 winner ID 和 manager 的
+ego_lane_id_ 没有默认值；默认构造后直接调用 getter/ConstructBehavior/部分私有路径会读不确定值。
+original_winner_id()/processed_winner_id() 不检查 snapshot.valid，map()/planner() 又暴露可变内部对象，
+外部可绕过 Run 状态机修改 planner 或地图。Reset 只把 context_.is_valid 置 false，不清 last_snapshot、
+last_task、lc_context、proposal 或请求队列，重启/场景切换后可能沿用旧 HMI 状态。Snapshot 对全部
+候选嵌套轨迹做第二次深拷贝，随后 last_snapshot_=snapshot 再复制一次；ConstructBehavior 又复制
+选中轨迹，内存峰值和延迟与候选/周车/时域乘积增长。Task 中未初始化 user_desired_vel 风险会被
+last_task_ 一并带入；LaneChangeTriggerType 和 user_perferred_behavior 仍缺少强类型统一状态模型。
+Manager 没有显式 initialized/last-run-success 状态，也没有线程安全约束；Visualizer 还持有其非拥有
+裸指针。M1 应给所有状态确定默认值，采用 generation/epoch 区分新旧场景，Reset 做完整状态复位，
+只暴露 const 快照/受控命令接口，并用 move/共享只读轨迹降低复制；测试应覆盖默认构造 getter、
+Run 前 ConstructBehavior、Reset 后重新接管、场景时间回退、连续失败、并发可视化读取和大快照峰值。
