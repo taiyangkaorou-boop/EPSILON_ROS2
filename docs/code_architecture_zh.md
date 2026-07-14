@@ -66,7 +66,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.2a3b2 `semantics` 车道、障碍物与 KD-tree 适配。
 - [x] M0.2a3c `semantics` SSC cube/corridor、交通信号与枚举工具。
 - [x] M0.2a4a `core/common` State/FreeState/FrenetState/Waypoint/StateTransformer。
-- [ ] M0.2a4b `core/common` Lane 与 LaneGenerator。
+- [x] M0.2a4b `core/common` Lane 与 LaneGenerator。
 - [ ] M0.2b `core/common` 数学、样条、轨迹与圆弧。
 - [ ] M0.2c `core/common` 求解器、安全模型、车辆行为模型与可视化。
 - [ ] M0.3 语义地图、前向仿真、预测和行为规划。
@@ -179,3 +179,21 @@ SSC map adapter 明确填充，不能因为障碍物本身没有时间字段就�
 批量转换接口采用 fail-fast，但失败前已经写入的输出前缀不会回滚；世界到 Frenet 的
 弧长投影使用有限采样，并以 0.5 m 切向偏差作为拒绝阈值。后续连续性和投影鲁棒性
 实验必须显式记录这些近似，而不能把转换失败静默当作有效轨迹。
+
+## 12. M0.2a4b：车道连续几何与离散样本建模
+
+- `Lane` 按值持有 `Spline<5, 2>`，负责位置、各阶导数、单位切/法向、航向、曲率及
+  曲率导数查询；它不包含车道拓扑、宽度、限速或交通规则；
+- 项目通常用离散中心线的累计弦长作为样条参数，但 `Lane` 不执行严格弧长重参数化，
+  因而 `arc_length` 接口名不代表位置一阶导数的模恒为 1；
+- 世界点投影先用覆盖全参数域的三个候选点进行最多 4 次粗搜索，任一候选进入 30 m
+  半径后即选择当前最近候选，再执行最多 8 次 Newton 局部最小化；
+- `LaneGenerator::GetLaneBySamplePoints` 通过相邻二维点的欧氏距离累加参数，再调用
+  自然三次样条插值；三次系数封装在统一的五次样条表示中；
+- `GetLaneBySampleFitting` 调用分段五次样条拟合，通过等式约束保持段间位置到 jerk
+  连续，并对高阶系数施加调用方给定的正则权重。
+
+已确认的后续修复/验证点：曲率接口未防止一阶导数模长接近零，且曲率导数表达式需要
+独立数值推导复核；投影 Newton 步未防止二阶项接近零，没有线搜索、局部极小/全局最近
+性验证，外层还忽略下层错误码并固定返回成功；生成器不在本层验证空输出指针、参数严格
+递增、`breaks` 与样本参数覆盖关系或样本自交。上述行为本标签只记录，不改变 baseline。
