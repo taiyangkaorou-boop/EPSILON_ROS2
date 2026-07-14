@@ -103,7 +103,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.3c6b 行为/轨迹预测与语义车辆。
 - [x] M0.3c6c 语义 Lane、本地 Lane 与快速 LUT。
 - [x] M0.3c6d Lane 距离、碰撞、可达性与最近 Lane。
-- [ ] M0.3c6e 关键车辆筛选。
+- [x] M0.3c6e 关键车辆筛选。
 - [ ] M0.3c6f 局部/参考 Lane 生成与采样。
 - [ ] M0.3c6g 前后车、交通查询与 LaneNet 距离。
 - [ ] M0.4 SSC、车辆模型、物理仿真、playground 与配置。
@@ -945,3 +945,28 @@ NaN/无效弧长可进入排序。最近 Lane 的兜底条件漏掉 fabs，接�
 “不可达”混为一谈，未命中时不写 num_lane_changes；visited 只保留首次路径，换道数不
 保证最小，邻接重复还可能把 child 误计作横向边。M1 应建立连续扫掠体/时序碰撞与明确
 Unknown 策略，修复航向绝对值和导航约束，并让可达性返回截断状态及最小换道代价。
+
+## 48. M0.3c6e：基于 Lane 偏移近似的关键车辆筛选
+
+- 函数先把全部周车复制为 key 集合；成功匹配自车当前 Lane 后才清空并执行精筛。因此
+  最近 Lane 失败会返回错误但保留“全部周车都是 key”的初始回退状态；
+- key Lane 图包含当前 Lane、可换左右相邻 Lane，以及搜索半径内的 child/father。当前
+  Lane 起点 offset 为 `-ego_arc_len`，相邻 Lane 直接复用该值；前向初始剩余长度也统一
+  复用当前 Lane `length-ego_arc_len`；
+- 前方关键距离由 `v_ego*max(5,v_ego/1.6)+100` 计算，再限制到 30--170 m。车辆近似纵距
+  为其 Lane 起点 offset 加 Lane 上弧长；落在前方窗口即纳入，但当前 Lane 上弧长小于 ego
+  的车辆被再次排除；
+- 后方只展开相邻 Lane 的 father，不展开当前 Lane father；后车窗口为
+  `max(20 m,5*|v_agent|)`，当前 Lane 后车仍显式排除。入选结果同步写 ID、SemanticVehicle
+  和 Vehicle 三个容器。
+
+已确认的后续修复/验证点：代码自身已用 `//! bug!` 标记 successor 长度逻辑。相邻 Lane
+并不一定与当前 Lane 起点/弧长对齐，却复用 current offset；不同根 Lane 也复用当前 Lane
+剩余长度。深层 successor 插入 key_lane_ids 时使用固定 len_sum 而非当前 len_expand，导致
+纵距系统性错误；map insert 又不会修正重复 Lane 的更优 offset。前后展开没有 visited/
+cycle 防护，`.at` 假设完整拓扑闭合。只展开相邻 Lane 的 predecessor 且排除当前 Lane 后车
+会漏掉高速追尾风险；front_range 的固定 +100 m 和硬上下界未按制动/RSS 校准。车辆距离
+默认 -1 会通过 `>2 m` 检查，所有值无有限性验证。筛选没有使用类内 rss_checker_，也不
+使用 uncertain_vehicle_ids_，与安全/不确定性语义脱节。UpdateSemanticMap 又忽略本函数
+错误，使“全部车辆回退”不可观测。M1 应在统一参考 Lane/Frenet 图上计算真实有符号距离，
+用 RSS/TTC/可达占用选择关键交互体，并显式标识正常精筛、保守回退和拓扑失败状态。

@@ -310,6 +310,7 @@ class SemanticMapManager {
   /// 为每辆周车匹配最近 Lane、执行 Naive 行为预测并构造对应参考 Lane。
   ErrorType UpdateSemanticVehicles();
 
+  /// 基于自车附近可达 Lane 的近似纵向偏移和前后距离窗口筛选关键周车。
   ErrorType UpdateKeyVehicles();
 
   /// 清空并重建全部语义周车的开环状态预测轨迹。

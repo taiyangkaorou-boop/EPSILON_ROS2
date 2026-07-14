@@ -929,28 +929,30 @@ ErrorType SemanticMapManager::TrajectoryPredictionForVehicle(
 }
 
 ErrorType SemanticMapManager::UpdateKeyVehicles() {
-  // ~ directly use semantic surrounding vehicle as key vehicle
+  // 先把全部周车作为失败前的初始 key 集合；若后续最近 Lane 查询失败会直接保留该全集。
   semantic_key_vehicles_ = semantic_surrounding_vehicles_;
   key_vehicles_ = surrounding_vehicles_;
 #if 1
+  // Lane 拓扑展开距离使用配置中的周车搜索半径。
   decimal_t search_radius = agent_config_info_.surrounding_search_radius;
 
+  // key_lane_ids 保存 Lane ID 到“该 Lane 起点相对自车”的近似有符号纵向偏移。
   std::map<int, decimal_t> key_lane_ids;  // lane_id, length to the cur_pos
   int cur_lane_id;
   decimal_t cur_lane_dist;
   decimal_t cur_arc_len;
 
+  // 无导航约束地匹配自车当前 Lane；失败时返回错误且不清理开头复制的全量 key 集合。
   if (GetNearestLaneIdUsingState(ego_vehicle_.state().ToXYTheta(),
                                  std::vector<int>(), &cur_lane_id,
                                  &cur_lane_dist, &cur_arc_len) != kSuccess) {
     return kWrongStatus;
   }
 
-  // Find key lane ids
+  // 构造当前、可换相邻 Lane 以及搜索半径内前后继 Lane 的近似纵向坐标系。
   {
     std::vector<int> mid_lane_ids;
-    // left and right lanes
-    // id - reference arc_len of start points w.r.t to ego vehicle
+    // 当前 Lane 起点相对自车为 -cur_arc_len；左右相邻被假设具有相同起点偏移。
     key_lane_ids.insert(std::pair<int, decimal_t>(cur_lane_id, -cur_arc_len));
     mid_lane_ids.push_back(cur_lane_id);
     if (whole_lane_net_.lane_set.at(cur_lane_id).l_change_avbl) {
@@ -966,16 +968,17 @@ ErrorType SemanticMapManager::UpdateKeyVehicles() {
           whole_lane_net_.lane_set.at(cur_lane_id).r_lane_id);
     }
 
-    // successors
+    // 向前展开当前和相邻 trunk Lane 的 child；初始剩余长度统一使用当前 Lane。
     decimal_t len_front =
         whole_lane_net_.lane_set.at(cur_lane_id).length - cur_arc_len;
     for (const int &id : mid_lane_ids) {
-      // ! bug!
+      // baseline 已标记此处存在长度/offset 逻辑问题。
       decimal_t len_sum = len_front;
       if (len_sum >= search_radius) continue;
       std::set<std::pair<decimal_t, int>> id_to_expand;
       id_to_expand.insert(std::pair<decimal_t, int>(len_sum, id));
       while (!id_to_expand.empty()) {
+        // 按累计长度从近到远展开；没有单独 visited/cycle 集合。
         auto it = id_to_expand.begin();
         decimal_t len_expand = it->first;
         int id_expand = it->second;
@@ -983,6 +986,7 @@ ErrorType SemanticMapManager::UpdateKeyVehicles() {
         std::vector<int> succ_ids =
             whole_lane_net_.lane_set.at(id_expand).child_id;
         for (const auto &succ_id : succ_ids) {
+          // successor offset 使用固定 len_sum，而不是当前分支 len_expand。
           key_lane_ids.insert(std::pair<int, decimal_t>(succ_id, len_sum));
           decimal_t len_tmp =
               whole_lane_net_.lane_set.at(succ_id).length + len_expand;
@@ -992,16 +996,18 @@ ErrorType SemanticMapManager::UpdateKeyVehicles() {
         }
       }
     }
-    // predecessors
+    // 删除当前 Lane 后，只向后展开左右相邻 trunk 的 father；当前 Lane 后继不进入 key 图。
     auto it = std::find(mid_lane_ids.begin(), mid_lane_ids.end(), cur_lane_id);
     mid_lane_ids.erase(it);
     decimal_t len_rear = -cur_arc_len;
     for (const auto &id : mid_lane_ids) {
+      // 相邻 Lane 的初始后向 offset 同样复用当前 Lane 的 -cur_arc_len。
       decimal_t len_sum = len_rear;
       if (fabs(len_sum) >= search_radius) continue;
       std::set<std::pair<decimal_t, int>> id_to_expand;
       id_to_expand.insert(std::pair<decimal_t, int>(len_sum, id));
       while (!id_to_expand.empty()) {
+        // 以更负的累计距离展开 father；同样没有显式环检测。
         auto it = id_to_expand.begin();
         decimal_t len_expand = it->first;
         int id_expand = it->second;
@@ -1024,6 +1030,7 @@ ErrorType SemanticMapManager::UpdateKeyVehicles() {
   decimal_t min_radius = 30.0;
   decimal_t dec_comfort = 1.6;
   decimal_t t_pl = 5.0;
+  // 舒适前视时间取 max(5 s, v_ego/1.6)，距离再加固定 100 m 并限制到 30--170 m。
   decimal_t t_comfort =
       std::max(t_pl, ego_vehicle_.state().velocity / dec_comfort);
   decimal_t pl_horizon_length = ego_vehicle_.state().velocity * t_comfort + 100;
@@ -1031,24 +1038,23 @@ ErrorType SemanticMapManager::UpdateKeyVehicles() {
   decimal_t front_range = std::min(pl_horizon_length, max_radius);
   front_range = std::max(min_radius, front_range);
 
-  // get key surrounding vehicles
-  // ~ Here we use an assumption:
-  // ~ All nearby/reachable lanes have similar length and start from similar
-  // ~ arc_len
+  // 筛选假设附近可达 Lane 长度相近、起点大致对齐，因此可用 offset+arc_len 近似纵距。
   key_vehicle_ids_.clear();
   semantic_key_vehicles_.semantic_vehicles.clear();
   key_vehicles_.vehicles.clear();
   {
     for (const auto &v : semantic_surrounding_vehicles_.semantic_vehicles) {
+      // 车辆离最近 Lane 超过 2 m 时直接排除；默认负距离会通过该条件。
       if (v.second.dist_to_lane > max_distance_to_lane_) {
         continue;
       }
       int v_lane_id = v.second.nearest_lane_id;
       auto it = key_lane_ids.find(v_lane_id);
       if (it != key_lane_ids.end()) {
+        // 车辆近似相对纵距 = 所在 Lane 起点 offset + 车辆 Lane 上弧长。
         decimal_t len_offset = it->second;
         decimal_t dist = len_offset + v.second.arc_len_onlane;
-        // * Front
+        // 前方车辆在 [0, front_range) 内时纳入；当前 Lane 上实际位于 ego 后方者再排除。
         if (dist >= 0 && fabs(dist) < front_range) {
           int v_id = v.first;
           if (v.second.nearest_lane_id == cur_lane_id &&
@@ -1063,7 +1069,7 @@ ErrorType SemanticMapManager::UpdateKeyVehicles() {
               v_id, semantic_surrounding_vehicles_.semantic_vehicles.at(v_id)
                         .vehicle));
         }
-        // * Rear
+        // 后方窗口按该周车速度取 max(20 m, 5*|v_agent|)。
         decimal_t s_margin =
             std::max(20.0, fabs(v.second.vehicle.state().velocity) * t_pl);
         if (dist < 0 && s_margin > fabs(dist)) {
@@ -1071,6 +1077,7 @@ ErrorType SemanticMapManager::UpdateKeyVehicles() {
           if (v.second.nearest_lane_id == cur_lane_id &&
               v.second.arc_len_onlane < cur_arc_len)
             continue;
+          // 同样写入 ID、语义车辆和原始车辆三个 key 输出容器。
           key_vehicle_ids_.push_back(v_id);
           semantic_key_vehicles_.semantic_vehicles.insert(
               std::pair<int, common::SemanticVehicle>(
