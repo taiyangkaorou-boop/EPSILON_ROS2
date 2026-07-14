@@ -83,7 +83,10 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.2c5b `core/common` Pose、PointCloud 与基础几何 Marker。
 - [x] M0.2c5c `core/common` Mesh、箭头、线条、文本与车辆 Marker。
 - [x] M0.2c5d `core/common` 障碍物、SemanticBehavior 与 GridMap 可视化。
-- [ ] M0.3 语义地图、前向仿真、预测和行为规划。
+- [x] M0.3a1 OnLaneFsPredictor 与驾驶风格参数查表。
+- [ ] M0.3a2 OnLaneForwardSimulation 单步/多步传播。
+- [ ] M0.3b BehaviorPlanner 地图接口、适配器与规划主类。
+- [ ] M0.3c SemanticMapManager 支撑组件与主类。
 - [ ] M0.4 SSC、车辆模型、物理仿真、playground 与配置。
 - [ ] M0.5 全仓覆盖审计和遗漏补齐。
 
@@ -495,3 +498,18 @@ ROS row-major 宽度语义转置；只使用第 0 维分辨率，T 到 int8 数�
 三维接口在 `i>dims_step(2)` 时退出，只画完整 z=0 层和 z=1 的首个体素；点坐标仅 z
 减原点而 x/y 保持全局，又叠加 Marker pose，坐标约定不一致。M0.2c 注释阶段至此完成，
 这些问题进入 M1 可视化/静态修复，不与规划创新实现混合。
+
+## 29. M0.3a1：开环单车预测与驾驶风格参数表
+
+- `OnLaneFsPredictor` 清空输出后先写入车辆当前状态，再循环调用
+  `OnLaneForwardSimulation::PropagateOnce`；有效 Lane 使用 Frenet/车道重载，无效
+  Lane 使用自由空间重载；
+- 预测不输入前车，IDM 期望速度固定为当前速度，属于确定性开环保持趋势外推；
+- `MultiModalForward::ParamLookUp` 只把 1--5 五档等级映射为时距、最小间距、最大
+  加速、舒适制动和固定转向增益，本身没有生成多条 rollout 或管理模态概率。
+
+已确认的后续修复/验证点：预测步数为 `round(t_pred/t_step)`，未验证正步长、有限时长
+或 int 范围，实际终点不一定等于请求时长；失败时保留部分输出。预测器析构函数只有
+声明没有定义，实例化对象会有链接风险。参数查表只覆盖 Param 子集，非法等级仅 assert，
+release 中仍返回成功且保持旧参数；当前仓库没有实际调用 `MultiModalForward` 的位置。
+这些限制说明 baseline 的周车预测还不是带持续驾驶风格 belief 的真正多模态模型。
