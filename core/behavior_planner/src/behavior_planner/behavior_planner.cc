@@ -251,6 +251,7 @@ ErrorType BehaviorPlanner::OpenloopSimForward(
     const common::SemanticVehicleSet& agent_vehicles,
     vec_E<common::Vehicle>* traj,
     std::unordered_map<int, vec_E<common::Vehicle>>* surround_trajs) {
+  // 初始化输出：自车和每辆周车的轨迹都以当前时刻状态作为第一个采样点。
   traj->clear();
   traj->push_back(ego_semantic_vehicle.vehicle);
   surround_trajs->clear();
@@ -260,11 +261,13 @@ ErrorType BehaviorPlanner::OpenloopSimForward(
     surround_trajs->at(v.first).push_back(v.second.vehicle);
   }
 
+  // 仿真步数按 horizon/resolution 向下取整；临时集合保存逐步推进后的周车状态。
   int num_steps_forward = static_cast<int>(sim_horizon_ / sim_resolution_);
   common::Vehicle cur_ego_vehicle = ego_semantic_vehicle.vehicle;
   common::SemanticVehicleSet semantic_vehicle_set_tmp = agent_vehicles;
   common::State ego_state;
   for (int i = 0; i < num_steps_forward; i++) {
+    // 开环降级不查询前车：自车按参考期望速度沿候选参考车道独立传播一步。
     sim_param_.idm_param.kDesiredVelocity = reference_desired_velocity_;
     if (planning::OnLaneForwardSimulation::PropagateOnce(
             common::StateTransformer(ego_semantic_vehicle.lane),
@@ -272,6 +275,9 @@ ErrorType BehaviorPlanner::OpenloopSimForward(
             &ego_state) != kSuccess) {
       return kWrongStatus;
     }
+
+    // 周车也不考虑相互作用，并保持各自初始速度为期望速度。先缓存所有下一状态，
+    // 保证同一仿真步内每辆车都从相同时间切片出发，不受遍历顺序影响。
     std::unordered_map<int, State> state_cache;
     for (auto& v : semantic_vehicle_set_tmp.semantic_vehicles) {
       decimal_t desired_vel =
@@ -287,12 +293,13 @@ ErrorType BehaviorPlanner::OpenloopSimForward(
       state_cache.insert(std::make_pair(v.first, agent_state));
     }
 
+    // 仅使用地图接口筛查自车下一状态；碰撞时终止本候选行为的开环预测。
     bool is_collision = false;
     map_itf_->CheckIfCollision(ego_semantic_vehicle.vehicle.param(), ego_state,
                                &is_collision);
     if (is_collision) return kWrongStatus;
 
-    // * update and trace
+    // 同步提交本步缓存，并把更新后的自车、周车状态追加到各自轨迹。
     cur_ego_vehicle.set_state(ego_state);
     for (auto& s : state_cache) {
       semantic_vehicle_set_tmp.semantic_vehicles.at(s.first).vehicle.set_state(
@@ -311,9 +318,11 @@ ErrorType BehaviorPlanner::SimulateEgoBehavior(
     vec_E<common::Vehicle>* traj,
     std::unordered_map<int, vec_E<common::Vehicle>>* surround_trajs) {
   const decimal_t max_backward_len = 10.0;
+  // 前向参考车道至少覆盖 50 m，高速时按当前速度的 10 倍延长；后向固定覆盖 10 m。
   decimal_t forward_lane_len =
       std::max(ego_vehicle.state().velocity * 10.0, 50.0);
   common::Lane ego_reflane;
+  // 将候选 LK/LCL/LCR 行为映射为本次 rollout 使用的自车参考车道。
   if (map_itf_->GetRefLaneForStateByBehavior(
           ego_vehicle.state(), p_route_planner_->navi_path(), ego_behavior,
           forward_lane_len, max_backward_len, false,
@@ -322,22 +331,25 @@ ErrorType BehaviorPlanner::SimulateEgoBehavior(
     return kWrongStatus;
   }
 
+  // 组合车辆本体与候选参考车道，形成多车仿真接口所需的语义自车。
   common::SemanticVehicle ego_semantic_vehicle;
   {
     ego_semantic_vehicle.vehicle = ego_vehicle;
     ego_semantic_vehicle.lane = ego_reflane;
   }
 
+  // 在周车集合副本中加入自车；原始输入保留给后续开环降级路径使用。
   common::SemanticVehicleSet semantic_vehicle_set_tmp = semantic_vehicle_set;
   semantic_vehicle_set_tmp.semantic_vehicles.insert(
       std::make_pair(ego_vehicle.id(), ego_semantic_vehicle));
 
-  // ~ multi-agent forward
+  // 首选包含跟驰交互的同步多车 rollout，以获得自车与周车的联合预测轨迹。
   printf("[MPDM]simulating behavior %d.\n", static_cast<int>(ego_behavior));
   if (MultiAgentSimForward(ego_vehicle.id(), semantic_vehicle_set_tmp, traj,
                            surround_trajs) != kSuccess) {
     printf("[MPDM]multi agent forward under %d failed.\n",
            static_cast<int>(ego_behavior));
+    // 多车仿真失败时退化为各车辆互不响应的固定车道开环传播。
     if (OpenloopSimForward(ego_semantic_vehicle, semantic_vehicle_set, traj,
                            surround_trajs) != kSuccess) {
       printf("[MPDM]open loop forward under %d failed.\n",
@@ -511,6 +523,7 @@ ErrorType BehaviorPlanner::MultiAgentSimForward(
     const int ego_id, const common::SemanticVehicleSet& semantic_vehicle_set,
     vec_E<common::Vehicle>* traj,
     std::unordered_map<int, vec_E<common::Vehicle>>* surround_trajs) {
+  // 初始化输出：自车轨迹与各周车轨迹均包含当前时刻的初始状态。
   traj->clear();
   traj->push_back(semantic_vehicle_set.semantic_vehicles.at(ego_id).vehicle);
 
@@ -522,6 +535,7 @@ ErrorType BehaviorPlanner::MultiAgentSimForward(
     surround_trajs->at(v.first).push_back(v.second.vehicle);
   }
 
+  // 仿真步数向下取整；临时语义集合保存每个时间切片提交后的全体车辆状态。
   int num_steps_forward = static_cast<int>(sim_horizon_ / sim_resolution_);
 
   common::SemanticVehicleSet semantic_vehicle_set_tmp = semantic_vehicle_set;
@@ -529,24 +543,27 @@ ErrorType BehaviorPlanner::MultiAgentSimForward(
   TicToc timer;
   for (int i = 0; i < num_steps_forward; i++) {
     timer.tic();
+    // 本步只写入缓存，待所有车辆计算完成后统一更新，形成同步多智能体 rollout。
     std::unordered_map<int, State> state_cache;
     for (auto& v : semantic_vehicle_set_tmp.semantic_vehicles) {
+      // 周车保持初始速度为期望速度，自车使用当前规划周期的参考期望速度。
       decimal_t desired_vel = semantic_vehicle_set.semantic_vehicles.at(v.first)
                                   .vehicle.state()
                                   .velocity;
       decimal_t init_stamp = semantic_vehicle_set.semantic_vehicles.at(v.first)
                                  .vehicle.state()
-                                 .time_stamp;
+                                  .time_stamp;
       if (v.first == ego_id) desired_vel = reference_desired_velocity_;
 
+      // 构造排除当前被仿真车辆的环境车辆集合，供前车查询使用。
       common::VehicleSet vehicle_set;
       for (auto& v_other : semantic_vehicle_set_tmp.semantic_vehicles) {
-        // ~ get the subset of vehicles excluding the simulating one
         if (v_other.first != v.first)
           vehicle_set.vehicles.insert(
               std::make_pair(v_other.first, v_other.second.vehicle));
       }
 
+      // 若能获得车道限速，则为 IDM 预留 10% 裕量并限制本车期望速度。
       decimal_t speed_limit;
       if (map_itf_->GetSpeedLimit(v.second.vehicle.state(), v.second.lane,
                                   &speed_limit) == kSuccess) {
@@ -558,6 +575,7 @@ ErrorType BehaviorPlanner::MultiAgentSimForward(
       common::State state;
       decimal_t distance_residual_ratio = 0.0;
       const decimal_t lat_range = 2.2;
+      // 在固定参考车道上搜索前车；若当前状态已与前车碰撞，则本次 rollout 失败。
       if (map_itf_->GetLeadingVehicleOnLane(
               v.second.lane, v.second.vehicle.state(), vehicle_set, lat_range,
               &leading_vehicle, &distance_residual_ratio) == kSuccess) {
@@ -569,6 +587,7 @@ ErrorType BehaviorPlanner::MultiAgentSimForward(
           return kWrongStatus;
         }
       }
+      // 使用前车（若未查询到则为空车辆）执行一次车道坐标系下的跟驰传播。
       if (planning::OnLaneForwardSimulation::PropagateOnce(
               common::StateTransformer(v.second.lane), v.second.vehicle,
               leading_vehicle, sim_resolution_, sim_param_,
@@ -577,13 +596,13 @@ ErrorType BehaviorPlanner::MultiAgentSimForward(
         return kWrongStatus;
       }
 
-      // update state
+      // 统一以初始时间戳和离散步号生成预测时间，并缓存本车下一状态。
       state.time_stamp = init_stamp + (i + 1) * sim_resolution_;
       state_cache.insert(std::make_pair(v.first, state));
     }
     // printf("[Summary]single propogate once time: %lf.\n", timer.toc());
 
-    // use state cache to update vehicle set
+    // 所有车辆传播完成后同步提交状态，并分别追加到自车或对应周车轨迹。
     for (auto& s : state_cache) {
       semantic_vehicle_set_tmp.semantic_vehicles.at(s.first).vehicle.set_state(
           s.second);
@@ -595,7 +614,7 @@ ErrorType BehaviorPlanner::MultiAgentSimForward(
             semantic_vehicle_set_tmp.semantic_vehicles.at(s.first).vehicle);
       }
     }
-  }  // end num_steps_forward for
+  }
   return kSuccess;
 }
 

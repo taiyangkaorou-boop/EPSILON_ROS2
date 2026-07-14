@@ -88,7 +88,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.3a2b 标准单步传播、控制器辅助函数与车辆模型积分。
 - [x] M0.3b1 BehaviorPlannerMapItf 与 SemanticMapManager 适配器。
 - [x] M0.3b2a BehaviorPlanner 生命周期、候选枚举与 MPDM winner 输出。
-- [ ] M0.3b2b 多车前向 rollout 与碰撞筛选。
+- [x] M0.3b2b 多车前向 rollout 与碰撞筛选。
 - [ ] M0.3b2c 安全/效率/行为代价评估。
 - [ ] M0.3b2d 参考 Lane、Lane ID 状态机与参数访问器。
 - [ ] M0.3b3 BehaviorPlanner ROS 服务与可视化。
@@ -586,3 +586,28 @@ RoutePlanner 指针，多处更新返回码被忽略，初始 Lane 判断还使�
 `previous_desired_vel` 参数完全未使用，没有跨周期速度平滑/迟滞；HMI 覆盖横向 winner
 时仍输出原 MPDM winner 的期望速度，横纵向策略可能不一致。5 m/s 限幅后也不保证
 非负速度。候选 Lane 依赖上周期缓存，日志在每周期大量输出。
+
+## 34. M0.3b2b：候选行为的同步多车 rollout 与开环降级
+
+- `SimulateEgoBehavior` 按候选 LK/LCL/LCR 构造自车参考 Lane：前向长度为
+  `max(10*v, 50 m)`、后向长度固定 10 m；随后把语义自车插入车辆集合并首先执行
+  `MultiAgentSimForward`，失败时自动回退到 `OpenloopSimForward`；
+- `MultiAgentSimForward` 的每个离散步都基于同一时间切片计算全体车辆下一状态，再通过
+  `state_cache` 统一提交，避免容器遍历顺序污染预测。自车使用规划参考速度，周车以各自
+  初始速度为期望速度；若可查询限速，则进一步限制为限速的 90%；
+- 交互 rollout 会为当前车辆构造排除自身的环境集合，在固定参考 Lane 上查询前车，检查
+  当前车与该前车的当前状态是否碰撞，再调用 OnLaneForwardSimulation 完成一步跟驰传播；
+  输出的自车和周车轨迹都包含初始状态，预测时间戳按初始时间加离散步长重写；
+- `OpenloopSimForward` 是更弱的降级路径：自车与周车均不查询前车、互不响应，沿各自
+  固定参考 Lane 独立传播；自车使用参考期望速度，周车使用各自初始速度，并只通过地图
+  接口检查自车下一状态是否碰撞。
+
+已确认的后续修复/验证点：三个入口均未检查输出指针、正仿真步长/时域或 Lane 有效性，
+步数还会对 `sim_horizon_/sim_resolution_` 向下截断。多车入口用 `.at(ego_id)`，缺失
+自车会抛异常；插入语义自车使用 `insert`，同 ID 已存在时不会覆盖。碰撞接口错误码被
+忽略；交互 rollout 只在传播前检查当前车与查询到的前车，缺少传播后的全体车辆两两
+碰撞检查。开环路径的地图碰撞检查不一定包含同一步预测后的周车，而任意交互仿真失败
+都会回退到这种更弱的模型，可能掩盖碰撞或前车查询失败。所有车辆参考 Lane 在整个
+rollout 内固定，周车期望速度不随场景更新；每车每步重建其余车辆集合使复杂度约为
+O(N²)，`TicToc` 计时结果未使用。M1 应先补齐输入契约、错误传播和统一的时序碰撞筛查，
+再决定哪些失败允许降级以及降级候选应如何施加安全惩罚。

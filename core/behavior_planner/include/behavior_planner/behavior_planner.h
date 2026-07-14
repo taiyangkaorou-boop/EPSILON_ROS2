@@ -101,17 +101,33 @@ class BehaviorPlanner : public Planner {
 
   ErrorType UpdateEgoBehavior(const LateralBehavior& behavior_by_lane_id);
 
+  /// 在固定参考车道上同步滚动自车与周车，并记录各车完整预测轨迹。
+  ///
+  /// semantic_vehicle_set 必须包含 ego_id 对应的语义车辆。每个仿真步先基于
+  /// 同一时刻的车辆集合计算全部下一状态，再统一提交，避免车辆遍历顺序污染结果。
+  /// traj 输出自车轨迹，surround_trajs 按车辆 ID 输出周车轨迹，二者都包含初始状态。
+  /// 当前状态已碰撞、前向传播失败等情况返回 kWrongStatus，由上层决定是否降级。
   ErrorType MultiAgentSimForward(
       const int ego_id, const common::SemanticVehicleSet& semantic_vehicle_set,
       vec_E<common::Vehicle>* traj,
       std::unordered_map<int, vec_E<common::Vehicle>>* surround_trajs);
 
+  /// 多车交互仿真失败时使用的独立开环降级预测。
+  ///
+  /// 自车和每辆周车均沿各自固定参考车道传播，不查询前车，也不建模车辆间响应；
+  /// 自车使用规划参考速度，周车保持各自初始速度作为期望速度。输出轨迹包含初始
+  /// 状态；任一车辆传播失败或自车预测状态被地图判定碰撞时返回 kWrongStatus。
   ErrorType OpenloopSimForward(
       const common::SemanticVehicle& ego_semantic_vehicle,
       const common::SemanticVehicleSet& agent_vehicles,
       vec_E<common::Vehicle>* traj,
       std::unordered_map<int, vec_E<common::Vehicle>>* surround_trajs);
 
+  /// 为一个候选横向行为构造自车参考车道并生成联合预测轨迹。
+  ///
+  /// 函数先把自车加入语义车辆集合执行多车交互 rollout；若交互仿真失败，则自动
+  /// 回退到独立开环预测。traj 和 surround_trajs 分别返回自车与周车的时序状态，
+  /// 参考车道构造失败或两级预测均失败时返回 kWrongStatus。
   ErrorType SimulateEgoBehavior(
       const common::Vehicle& ego_vehicle, const LateralBehavior& ego_behavior,
       const common::SemanticVehicleSet& semantic_vehicle_set,
