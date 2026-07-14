@@ -73,7 +73,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.2b2c1 `core/common` SplineGenerator 插值、拟合与状态连接。
 - [x] M0.2b2c2 `core/common` 带参考接近项的 Bezier corridor QP。
 - [x] M0.2b2c3 `core/common` 基础 Bezier corridor QP。
-- [ ] M0.2b3 `core/common` 轨迹表示与生成。
+- [x] M0.2b3 `core/common` 轨迹抽象、Frenet Bezier 与 FrenetPrimitive 包装。
 - [ ] M0.2c `core/common` 求解器、安全模型、车辆行为模型与可视化。
 - [ ] M0.3 语义地图、前向仿真、预测和行为规划。
 - [ ] M0.4 SSC、车辆模型、物理仿真、playground 与配置。
@@ -306,3 +306,21 @@ SSC map adapter 明确填充，不能因为障碍物本身没有时间字段就�
 参考项入口为适配 `0.5*x'Qx+c'x` 将总二次矩阵乘 2，纯平滑入口没有乘 2。纯平滑时
 这只是整体目标尺度变化，理论最优解不变，但会改变求解器数值尺度与容差表现；一旦
 加入其他软目标便不再等价。后续应抽取共享 QP builder，并对两重载做矩阵级一致性测试。
+
+## 19. M0.2b3：轨迹抽象与 Frenet 实现
+
+- `Trajectory` 统一世界状态查询、参数域、有效性和优化变量读写；`FrenetTrajectory`
+  增加 FrenetState 查询与纵横向 jerk 指标接口；
+- `FrenetBezierTrajectory` 按值持有二维 `[s(t),d(t)]` Bezier 样条和 StateTransformer，
+  用位置、一阶导、二阶导构造时间参数化 FrenetState；纵向速度过小时退化为只保留
+  s/d 位置的弧长模式；
+- `FrenetPrimitiveTrajectory` 把 FrenetPrimitive 适配为相同接口，并将纵向、横向两个
+  五次多项式的阶乘缩放系数序列化为 12 维优化变量；时域和模式不包含在变量向量中；
+- 两种实现从 Frenet 转回世界状态后都把标量速度截断为非负，因此不表达倒车轨迹。
+
+已确认的后续修复/验证点：两种实现的查询函数都不先检查 `IsValid()`。Primitive 默认
+对象通常会被内部零时长检查拒绝；Bezier 默认对象在 `t=0` 可通过外层范围检查，又忽略
+三次 `BezierSpline::evaluate` 的错误码，随后使用未初始化位置/导数并返回成功。允许
+`kEPS` 的左边界外查询也有同一问题。Bezier 的 `variables()` 固定为空、setter 无操作、
+`Jerk()` 不写输出，属于静默未实现接口。Primitive setter 仅用 assert 检查 12 维长度，
+release 下短输入会越界，且改系数不更新有效标记或端状态。以上属于 M1 的高优先级修复。
