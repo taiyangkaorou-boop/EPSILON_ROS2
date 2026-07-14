@@ -55,24 +55,30 @@ class SemanticMapManager {
   /// 当前为空析构；配置构造器动态创建的 ConfigLoader 不会被释放。
   ~SemanticMapManager() {}
 
+  /// 查询世界点对应 GridMap 单元是否严格等于 OCCUPIED。
   ErrorType CheckCollisionUsingGlobalPosition(const Vec2f &p_w,
-                                              bool *res) const;
+                                               bool *res) const;
 
+  /// 返回世界点对应的原始障碍物 GridMap 数值。
   ErrorType GetObstacleMapValueUsingGlobalPosition(const Vec2f &p_w,
                                                    ObstacleMapType *res);
 
+  /// 检查给定车辆状态与静态栅格顶点、以及可选周车开环预测的碰撞。
   ErrorType CheckCollisionUsingStateAndVehicleParam(
       const common::VehicleParam &vehicle_param, const common::State &state,
       bool *res);
 
+  /// 用两个车辆状态构造 OBB 并执行分离轴相交检查。
   ErrorType CheckCollisionUsingState(const common::VehicleParam &param_a,
                                      const common::State &state_a,
                                      const common::VehicleParam &param_b,
                                      const common::State &state_b, bool *res);
 
+  /// 预留状态序列碰撞检查；当前只有声明，没有实现定义。
   ErrorType CheckCollisionUsingStateVec(
       const vec_E<common::State> state_vec) const;
 
+  /// 对全部语义 Lane 计算状态投影距离、弧长、航向差和 Lane ID，保留 10 m 内结果。
   ErrorType GetDistanceToLanesUsing3DofState(
       const Vec3f &state,
       std::set<std::tuple<decimal_t, decimal_t, decimal_t, int>> *res) const;
@@ -86,6 +92,7 @@ class SemanticMapManager {
       const std::set<std::array<decimal_t, 2>> &obstacle_grids,
       const common::VehicleSet &surrounding_vehicles);
 
+  /// 在附近 Lane 中优先按航向差选择最近 Lane，并输出距离和投影弧长。
   ErrorType GetNearestLaneIdUsingState(const Vec3f &state,
                                        const std::vector<int> &navi_path,
                                        int *id, decimal_t *distance,
@@ -108,6 +115,7 @@ class SemanticMapManager {
                                             const decimal_t &t_step,
                                             vec_E<common::State> *traj);
 
+  /// 从给定 Lane 沿 child 和可换相邻 Lane 做最多 20 节点 BFS，判断能否到达 path 任一 ID。
   ErrorType IsTopologicallyReachable(const int lane_id,
                                      const std::vector<int> &path,
                                      int *num_lane_changes, bool *res) const;

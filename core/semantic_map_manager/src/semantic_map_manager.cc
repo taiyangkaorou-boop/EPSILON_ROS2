@@ -622,7 +622,9 @@ void SemanticMapManager::GetAllBackwardLaneIdPathsWithMinimumLengthByRecursion(
 ErrorType SemanticMapManager::GetDistanceToLanesUsing3DofState(
     const Vec3f &state,
     std::set<std::tuple<decimal_t, decimal_t, decimal_t, int>> *res) const {
+  // 遍历当前局部 SemanticLaneSet；调用方已有结果不会在本函数入口清空。
   for (const auto &p : semantic_lane_set_.semantic_lanes) {
+    // 把查询位置投影到 Lane，取得弧长和对应中心线点；各 Lane 查询错误码均忽略。
     decimal_t arc_len;
     p.second.lane.GetArcLengthByVecPosition(Vec2f(state(0), state(1)),
                                             &arc_len);
@@ -640,12 +642,15 @@ ErrorType SemanticMapManager::GetDistanceToLanesUsing3DofState(
     p.second.lane.GetPositionByArcLength(arc_len, &pt);
     double dist = std::hypot((state(0) - pt(0)), (state(1) - pt(1)));
 
+    // 只保留中心线欧氏距离不超过 lane_range_=10 m 的 Lane。
     if (dist > lane_range_) continue;
 
+    // 计算投影点 Lane 航向减查询 yaw 的归一化有符号角差。
     decimal_t lane_angle;
     p.second.lane.GetOrientationByArcLength(arc_len, &lane_angle);
     decimal_t angle_diff = normalize_angle(lane_angle - state(2));
 
+    // tuple 首字段为距离，因此 set 默认按距离、弧长、角差、ID 依次排序。
     res->insert(std::tuple<decimal_t, decimal_t, decimal_t, int>(
         dist, arc_len, angle_diff, p.second.id));
   }
@@ -664,6 +669,7 @@ ErrorType SemanticMapManager::CheckCollisionUsingState(
     const common::VehicleParam &param_a, const common::State &state_a,
     const common::VehicleParam &param_b, const common::State &state_b,
     bool *res) {
+  // 分别按车辆参数和状态构造两个 OBB，再用 SAT 几何相交结果覆盖输出。
   common::OrientedBoundingBox2D obb_a, obb_b;
   common::SemanticsUtils::GetOrientedBoundingBoxForVehicleUsingState(
       param_a, state_a, &obb_a);
@@ -676,7 +682,7 @@ ErrorType SemanticMapManager::CheckCollisionUsingState(
 ErrorType SemanticMapManager::CheckCollisionUsingStateAndVehicleParam(
     const common::VehicleParam &vehicle_param, const common::State &state,
     bool *res) {
-  // check static collision
+  // 静态碰撞仅检查候选车辆 OBB 的四个顶点是否落在 OCCUPIED 栅格。
   {
     // TODO: (@denny.ding) add static collision checking
     common::Vehicle vehicle;
@@ -687,6 +693,7 @@ ErrorType SemanticMapManager::CheckCollisionUsingStateAndVehicleParam(
         vehicle.RetOrientedBoundingBox(), &vertices);
     bool is_collision = false;
     for (auto &v : vertices) {
+      // GridMap 查询错误被忽略；命中任一顶点即提前返回碰撞。
       CheckCollisionUsingGlobalPosition(v, &is_collision);
       if (is_collision) {
         *res = is_collision;
@@ -695,15 +702,17 @@ ErrorType SemanticMapManager::CheckCollisionUsingStateAndVehicleParam(
     }
   }
 
-  // check dynamic collision
+  // 动态周车碰撞仅在配置启用开环预测时执行。
   if (agent_config_info_.enable_openloop_prediction) {
     for (const auto &v : semantic_surrounding_vehicles_.semantic_vehicles) {
+      // 用候选状态时间与该周车初始时间之差除以 0.2 s，并四舍五入到预测下标。
       auto state_stamp = state.time_stamp;
       auto obstacle_init_stamp = v.second.vehicle.state().time_stamp;
       auto openloop_pred_traj = openloop_pred_trajs_.at(v.first);
       int access_index =
           std::round((state_stamp - obstacle_init_stamp) / pred_step_);
       int num_pred_states = static_cast<int>(openloop_pred_traj.size());
+      // 候选时间早于周车初始时刻或超出预测时域时，直接跳过该周车。
       if (access_index < 0 || access_index >= num_pred_states) continue;
       bool is_collision = false;
       CheckCollisionUsingState(vehicle_param, state, v.second.vehicle.param(),
@@ -720,6 +729,7 @@ ErrorType SemanticMapManager::CheckCollisionUsingStateAndVehicleParam(
 
 ErrorType SemanticMapManager::CheckCollisionUsingGlobalPosition(
     const Vec2f &p_w, bool *res) const {
+  // 只把数值严格等于 OCCUPIED 的单元视为碰撞，不包含 SCANNED_OCCUPIED。
   std::array<decimal_t, 2> p = {{p_w(0), p_w(1)}};
   return obstacle_map_.CheckIfEqualUsingGlobalPosition(p, GridMap2D::OCCUPIED,
                                                        res);
@@ -727,6 +737,7 @@ ErrorType SemanticMapManager::CheckCollisionUsingGlobalPosition(
 
 ErrorType SemanticMapManager::GetObstacleMapValueUsingGlobalPosition(
     const Vec2f &p_w, ObstacleMapType *res) {
+  // 直接透传 GridMap 世界坐标查询，可返回 UNKNOWN/OCCUPIED/SCANNED_OCCUPIED 等原值。
   std::array<decimal_t, 2> p = {{p_w(0), p_w(1)}};
   return obstacle_map_.GetValueUsingGlobalPosition(p, res);
 }
@@ -734,14 +745,15 @@ ErrorType SemanticMapManager::GetObstacleMapValueUsingGlobalPosition(
 ErrorType SemanticMapManager::IsTopologicallyReachable(
     const int lane_id, const std::vector<int> &path, int *num_lane_changes,
     bool *res) const {
+  // 起始 Lane 不在当前局部 SemanticLaneSet 时返回错误，不写 reachability 输出。
   if (semantic_lane_set_.semantic_lanes.count(lane_id) == 0) {
     printf("[IsTopologicallyReachable]fail to get lane id %d.\n", lane_id);
     return kWrongStatus;
   }
-  // ~ check whether any node of the path is reachable from lane id
+  // 搜索最多展开 20 个节点，目标是命中导航 path 中任一 Lane ID。
   const int max_expansion_nodes = 20;
 
-  // ~ BFS starting from lane_id;
+  // BFS 记录 visited、待处理队列及首次到达每个 Lane 时累计的换道次数。
   std::unordered_map<int, int> num_lc_map;
   std::set<int> visited_set;
   std::list<int> queue;
@@ -757,6 +769,7 @@ ErrorType SemanticMapManager::IsTopologicallyReachable(
     queue.pop_front();
     expanded_nodes++;
 
+    // 当前节点若属于目标 path，立即输出首次发现路径的换道次数。
     if (std::find(path.begin(), path.end(), cur_id) != path.end()) {
       *num_lane_changes = num_lc_map.at(cur_id);
       is_reachable = true;
@@ -767,15 +780,18 @@ ErrorType SemanticMapManager::IsTopologicallyReachable(
     if (it == semantic_lane_set_.semantic_lanes.end()) {
       continue;
     } else {
+      // 邻接集合先加入所有 child，再按换道可用性追加左右相邻 Lane。
       child_ids = it->second.child_id;
       if (it->second.l_change_avbl) child_ids.push_back(it->second.l_lane_id);
       if (it->second.r_change_avbl) child_ids.push_back(it->second.r_lane_id);
     }
     if (child_ids.empty()) continue;
     for (auto &id : child_ids) {
+      // 每个 Lane ID 只入队一次；首次发现路径决定其换道计数。
       if (visited_set.count(id) == 0) {
         visited_set.insert(id);
         queue.push_back(id);
+        // 左右横向边换道数加一，纵向 child 边保持当前计数。
         if (it->second.l_change_avbl && id == it->second.l_lane_id) {
           num_lc_map.insert(std::make_pair(id, num_lc_map.at(cur_id) + 1));
         } else if (it->second.r_change_avbl && id == it->second.r_lane_id) {
@@ -787,6 +803,7 @@ ErrorType SemanticMapManager::IsTopologicallyReachable(
     }
   }
 
+  // 搜索耗尽或达到节点上限都以成功返回 false；失败时不写 num_lane_changes。
   if (!is_reachable) {
     *res = false;
   } else {
@@ -798,7 +815,7 @@ ErrorType SemanticMapManager::IsTopologicallyReachable(
 ErrorType SemanticMapManager::GetNearestLaneIdUsingState(
     const Vec3f &state, const std::vector<int> &navi_path, int *id,
     decimal_t *distance, decimal_t *arc_len) const {
-  // tuple: dist, arc_len, angle_diff, id
+  // 先收集 10 m 内 Lane，并按 (距离, 弧长, 有符号角差, ID) 排序。
   std::set<std::tuple<decimal_t, decimal_t, decimal_t, int>> lanes_in_dist;
   if (GetDistanceToLanesUsing3DofState(state, &lanes_in_dist) != kSuccess) {
     return kWrongStatus;
@@ -809,6 +826,7 @@ ErrorType SemanticMapManager::GetNearestLaneIdUsingState(
     return kWrongStatus;
   }
 
+  // navi_path 相关拓扑可达性筛选代码当前整体被注释，参数不参与实际选择。
   //   if (navi_path.empty()) {
   //     *id = std::get<3>(*lanes_in_dist.begin());
   //     *distance = std::get<0>(*lanes_in_dist.begin());
@@ -846,8 +864,7 @@ ErrorType SemanticMapManager::GetNearestLaneIdUsingState(
   // #endif
   //   }
 
-  // * Get candidate lanes within a small range, then sort by angle_diff
-  // tuple: angle_diff, dist, arc_len, id
+  // 在距离不超过 1.5 m 的候选中，重新按 (绝对角差, 距离, 弧长, ID) 排序。
   std::set<std::tuple<decimal_t, decimal_t, decimal_t, int>>
       lanes_in_angle_diff;
   for (const auto &ele : lanes_in_dist) {
@@ -860,8 +877,9 @@ ErrorType SemanticMapManager::GetNearestLaneIdUsingState(
   }
   if (lanes_in_angle_diff.empty() ||
       std::get<0>(*lanes_in_angle_diff.begin()) > kPi / 2) {
-    // Use the nearest lane with suitable angle diff
+    // 近距离候选为空或最佳绝对角差超过 90° 时，按距离扫描“方向合适” Lane。
     for (const auto &ele : lanes_in_dist) {
+      // baseline 此处比较有符号角差而非绝对值，负的大角差也满足 < π/2。
       if (std::get<2>(ele) < kPi / 2) {
         *id = std::get<3>(ele);
         *distance = std::get<0>(ele);
@@ -869,7 +887,7 @@ ErrorType SemanticMapManager::GetNearestLaneIdUsingState(
         return kSuccess;
       }
     }
-    // Otherwise, use the nearest lane
+    // 若没有通过上述条件的 Lane，则无视航向直接选择欧氏距离最近者。
     *id = std::get<3>(*lanes_in_dist.begin());
     *distance = std::get<0>(*lanes_in_dist.begin());
     *arc_len = std::get<1>(*lanes_in_dist.begin());
@@ -879,7 +897,7 @@ ErrorType SemanticMapManager::GetNearestLaneIdUsingState(
     //     *id);
     return kSuccess;
   }
-  // * Use the lane with minimum angle diff
+  // 正常路径选择 1.5 m 内绝对航向差最小者，而不一定是距离最近者。
   *id = std::get<3>(*lanes_in_angle_diff.begin());
   *distance = std::get<1>(*lanes_in_angle_diff.begin());
   *arc_len = std::get<2>(*lanes_in_angle_diff.begin());
