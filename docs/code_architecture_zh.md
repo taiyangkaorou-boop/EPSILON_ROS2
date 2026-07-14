@@ -126,6 +126,16 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.4d3 playground 场景资源与包元数据。
 - [x] M0.4d4 planning_integrated 集成入口与剩余构建/launch 审计。
 - [ ] M0.5 全仓覆盖审计和遗漏补齐。
+- [ ] M0.5a EUDM 决策树、地图接口、规划器、管理器、ROS 与配置。
+- [x] M0.5a1 EUDM DCP tree 与公共 Task/LaneChangeInfo 接口。
+- [ ] M0.5a2 EUDM 地图接口与 SemanticMapManager 适配器。
+- [ ] M0.5a3 EUDM 规划核心。
+- [ ] M0.5a4 EUDM manager、ROS server 与 visualizer。
+- [ ] M0.5a5 EUDM proto、CMake 与 package 元数据。
+- [ ] M0.5b ai_agent planner 与 launch/build。
+- [ ] M0.5c route_planner、vehicle_msgs 与公共 Planner 接口遗漏。
+- [ ] M0.5d 第一方包构建元数据补注释。
+- [ ] M0.5e 全仓函数/文件覆盖复核与 M0 结束标签。
 
 后续算法任务使用固定 `dev` 分支；每个小任务必须满足：工作树范围清晰、静态检查
 通过、提交信息包含模块名、创建 annotated tag、推送提交和标签，并在本索引中更新
@@ -1537,3 +1547,32 @@ server 线程生命周期与错误传播；构建改为 target-based 条件依�
 
 至此 M0.4 已完成：车辆模型、SSC、物理仿真、playground 数据和 MPDM/EUDM 集成入口均已逐层
 建立中文职责与静态风险索引。下一阶段 M0.5 将执行全仓覆盖审计，确认遗漏后再进入 M1 修复。
+
+## 66. M0.5a1：EUDM DCP 单次横向切换动作树
+
+- DcpLonAction 为 Maintain/Accelerate/Decelerate，DcpLatAction 为 LaneKeeping/LCL/LCR；单个
+  DcpAction 保存联合动作和持续时间，并支持日志输出整数枚举；
+- 构造函数保存 tree height、普通层时间和可选末层时间，立即用默认 ongoing action 生成脚本；
+  set_ongoing_action 只更新缓存，UpdateScript 才重建候选；
+- 对每个纵向动作，首层使用 ongoing 横向行为和剩余时间。随后枚举在第 h 层切到另外两种
+  横向行为并保持到末层的脚本，再加入全程不切换的脚本；纵向动作在整条序列恒定，横向至多
+  切换一次。树高 H>0 时每个纵向动作有 `2*(H-1)+1` 条，总数 `3*(2H-1)`；
+- 所有序列最后一层时长覆盖为 last_layer_time；planning_horizon 只累加第一条脚本，依赖全部
+  候选层时长一致。action_script getter 按值复制完整二维容器；
+- EUDM 公共 Task 汇总是否受控、用户期望速度、偏好行为和 LaneChangeInfo；后者区分左右禁换、
+  occupancy 不安全、实线约束和换道推荐标志。
+
+已确认的后续修复/验证点：tree_height、layer_time、last_layer_time 和 ongoing_action.t 均不
+检查正值/有限性。tree_height<=0 仍会为每个纵向动作生成一个首层动作，与配置树高矛盾；
+负追加次数静默不执行。ongoing_action.lon 被完全忽略，生成器允许首层立即切换到任意纵向动作，
+但横向必须从 ongoing.lat 开始，纵横向“正在执行”约束不对称。候选只允许零次或一次横向切换，
+切换后不能回退/再换道；纵向动作全时域恒定，表达能力随长时域受限。没有换道可用性、道路
+拓扑、动作持续最小值或 mutually-exclusive 约束，非法枚举只在 name helper 中返回 Null。
+GenerateActionScript 固定返回成功且未防候选数量/内存增长；action_script 深拷贝增加每周期
+开销。planning_horizon 假定候选等长而不验证。文件名/guard 仍沿用 behavior_tree，增加维护
+混淆。更严重的是 eudm::Task::user_desired_vel 没有初始化，默认构造后读取构成未定义行为；
+user_perferred_behavior 还存在拼写错误且用裸 int，无枚举/合法范围。LaneChangeInfo 多个 bool
+可能同时矛盾，例如 forbid 与 recommend 同时为 true，没有优先级或来源/时间戳。M1 应加入
+Config/Task 构造校验和强类型行为，明确 ongoing 纵横向动作完成语义，采用受约束 grammar/
+beam search 生成可表达多阶段交互但规模可控的脚本，并为 H=0/1、负时间、未初始化 Task、
+矛盾换道标志、候选数公式和 horizon 一致性建立测试。
