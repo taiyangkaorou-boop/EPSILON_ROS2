@@ -104,7 +104,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.3c6c 语义 Lane、本地 Lane 与快速 LUT。
 - [x] M0.3c6d Lane 距离、碰撞、可达性与最近 Lane。
 - [x] M0.3c6e 关键车辆筛选。
-- [ ] M0.3c6f 局部/参考 Lane 生成与采样。
+- [x] M0.3c6f 局部/参考 Lane 生成与采样。
 - [ ] M0.3c6g 前后车、交通查询与 LaneNet 距离。
 - [ ] M0.4 SSC、车辆模型、物理仿真、playground 与配置。
 - [ ] M0.5 全仓覆盖审计和遗漏补齐。
@@ -970,3 +970,29 @@ cycle 防护，`.at` 假设完整拓扑闭合。只展开相邻 Lane 的 predece
 使用 uncertain_vehicle_ids_，与安全/不确定性语义脱节。UpdateSemanticMap 又忽略本函数
 错误，使“全部车辆回退”不可观测。M1 应在统一参考 Lane/Frenet 图上计算真实有符号距离，
 用 RSS/TTC/可达占用选择关键交互体，并显式标识正常精筛、保守回退和拓扑失败状态。
+
+## 49. M0.3c6f：行为参考 Lane 的拓扑拼接、采样与拟合
+
+- 动态样本路径先投影 state 到目标 Lane。后方不足请求长度时沿 father 逐段扩展，前方沿
+  child 扩展；每个分叉默认取 front，若 navi_path 命中则选第一个命中 ID。father 逆序
+  收集后反转，再与当前/child 拼成道路前进顺序；
+- 原始点拼接只保留第一条非空 Lane 的第 0 点，每个分段随后均从 index 1 开始。先生成
+  长 Lane，再按请求前后窗口以 1 m 步长重采样；GetLocalLaneUsingLaneIds 使用 whole
+  LaneNet，GetLocalLaneSamplesByState 使用 surrounding LaneNet；
+- GetRefLane 先匹配当前 Lane并要求中心线距离不超过 2 m，再把 LK/Undefined 映射当前
+  Lane、LCL/LCR 映射可用相邻 Lane。fast LUT 命中时直接返回包含目标 segment 的最小
+  local ID 整条 Lane；未命中才动态采样指定长度并重新生成；
+- 高质量生成使用累计弦长参数、固定 20 个 breaks 和 `1e6` 正则拟合；普通模式直接用
+  LaneGenerator 的样本点生成。SampleLane 输出 `[s0,s1)`，终点不包含。
+
+已确认的后续修复/验证点：所有输出指针、长度、step 和有限性不检查，father/child 遍历
+没有 visited，拓扑环可无限循环；分叉只取第一个/导航首命中，无法比较几何连续性或路由
+代价。投影和 SampleLane 的 Lane 查询错误均被忽略，原始分段若不严格首尾重合会产生跳点，
+只有一个点的后续段被完全丢弃。两个调用点都把未初始化 `acc_dist_tmp` 传给 SampleLane
+执行 `+=step`，构成未定义行为；step<=0 还会无限循环。采样终点遗漏、按名义 step 而非
+实际弦长累计，裁剪上界也未统一 clamp 到长 Lane 终点。fast LUT 返回围绕 ego 构造的整条
+Lane，忽略当前查询 state、navi_path、max_forward/back 和 high_quality；多个路径仅取最小
+ID，且可能使用上一帧陈旧 LUT。高质量拟合不检查最少样本/重复点，固定 breaks/正则不随
+长度自适应。无效 behavior 在 release 下 assert 消失后可能成功返回未初始化 target ID。
+M1 应统一受限图搜索与连续性评分、初始化并验证采样契约，并让 fast LUT 返回可按 state/
+路由裁剪的稳定候选而非任意整条 Lane。

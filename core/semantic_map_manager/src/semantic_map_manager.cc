@@ -1104,17 +1104,20 @@ ErrorType SemanticMapManager::GetLocalLaneSamplesByState(
     const common::State &state, const int lane_id,
     const std::vector<int> &navi_path, const decimal_t max_reflane_dist,
     const decimal_t max_backward_dist, vec_Vecf<2> *samples) const {
+  // 目标 Lane 必须存在于当前局部 SemanticLaneSet。
   if (semantic_lane_set_.semantic_lanes.count(lane_id) == 0) {
     printf("[GetLocalLaneSamplesByState]fail to get lane id %d.\n", lane_id);
     return kWrongStatus;
   }
 
+  // 把查询状态位置投影到目标 Lane；投影错误码被忽略。
   decimal_t arclen = 0.0;
   common::Lane target_lane = semantic_lane_set_.semantic_lanes.at(lane_id).lane;
   target_lane.GetArcLengthByVecPosition(state.vec_position, &arclen);
   decimal_t accum_dist_backward = 0.0;
   std::vector<int> ids_back;
   {
+    // 当前 Lane 后方不足请求长度时，沿 father 链继续向上游累加。
     if (arclen < max_backward_dist) {
       accum_dist_backward += arclen;
       int id_tmp = lane_id;
@@ -1122,7 +1125,7 @@ ErrorType SemanticMapManager::GetLocalLaneSamplesByState(
         std::vector<int> father_ids =
             semantic_lane_set_.semantic_lanes.at(id_tmp).father_id;
         if (!father_ids.empty()) {
-          // TODO: double check the logic for front
+          // 默认选 father_ids.front；若任一 father 位于 navi_path，则优先第一个命中项。
           int father_id = father_ids.front();
           for (auto &id : father_ids) {
             if (std::find(navi_path.begin(), navi_path.end(), id) !=
@@ -1144,11 +1147,13 @@ ErrorType SemanticMapManager::GetLocalLaneSamplesByState(
     }
   }
 
+  // father 是从近到远收集，反转后得到上游到当前 Lane 的道路前进顺序。
   std::reverse(ids_back.begin(), ids_back.end());
 
   std::vector<int> ids_front;
   decimal_t accum_dist_forward = 0.0;
   {
+    // 当前 Lane 前方剩余长度不足请求长度时，沿 child 链向下游累加。
     decimal_t dist_remain_target_lane =
         semantic_lane_set_.semantic_lanes.at(lane_id).length - arclen;
     if (dist_remain_target_lane < max_reflane_dist) {
@@ -1158,8 +1163,8 @@ ErrorType SemanticMapManager::GetLocalLaneSamplesByState(
       while (accum_dist_forward < max_reflane_dist) {
         std::vector<int> child_ids =
             semantic_lane_set_.semantic_lanes.at(id_tmp).child_id;
-        // TODO: double check the logic for front
         if (!child_ids.empty()) {
+          // 默认选第一个 child，导航路径中第一个命中 child 可覆盖默认选择。
           int child_id = child_ids.front();
           for (auto &id : child_ids) {
             if (std::find(navi_path.begin(), navi_path.end(), id) !=
@@ -1183,11 +1188,13 @@ ErrorType SemanticMapManager::GetLocalLaneSamplesByState(
   }
 
   std::vector<int> lane_id_all;
+  // 拼成上游 fathers + 当前/下游 children 的完整原始 Lane ID 序列。
   lane_id_all.insert(lane_id_all.end(), ids_back.begin(), ids_back.end());
   lane_id_all.insert(lane_id_all.end(), ids_front.begin(), ids_front.end());
 
   vec_Vecf<2> raw_samples;
   for (const auto &id : lane_id_all) {
+    // 全序列只保留第一条非空 Lane 的首点；每段后续均从 index 1 开始避免重复连接点。
     if (raw_samples.empty() &&
         (int)surrounding_lane_net_.lane_set.at(id).lane_points.size() > 0) {
       raw_samples.push_back(
@@ -1201,12 +1208,14 @@ ErrorType SemanticMapManager::GetLocalLaneSamplesByState(
     }
   }
 
+  // 先用所有拼接原始点生成一条长 Lane。
   common::Lane long_lane;
   if (common::LaneGenerator::GetLaneBySamplePoints(raw_samples, &long_lane) !=
       kSuccess) {
     return kWrongStatus;
   }
 
+  // 在长 Lane 上裁出请求的后向长度与可用前向长度，并以 1 m 间隔追加输出样本。
   decimal_t acc_dist_tmp;
   decimal_t sample_start =
       std::max(0.0, accum_dist_backward - max_backward_dist);
@@ -1223,6 +1232,7 @@ ErrorType SemanticMapManager::GetLocalLaneUsingLaneIds(
     const common::State &state, const std::vector<int> &lane_ids,
     const decimal_t forward_length, const decimal_t backward_length,
     const bool &is_high_quality, common::Lane *lane) {
+  // 从完整 LaneNet 拼接路径原始点；同样只保留第一段的 index 0。
   vec_Vecf<2> raw_samples;
   for (const auto &id : lane_ids) {
     if (raw_samples.empty() &&
@@ -1235,6 +1245,7 @@ ErrorType SemanticMapManager::GetLocalLaneUsingLaneIds(
     }
   }
 
+  // 先构造整条路径 Lane，再把 state 投影到该 Lane 取得裁剪中心弧长。
   common::Lane long_lane;
   if (common::LaneGenerator::GetLaneBySamplePoints(raw_samples, &long_lane) !=
       kSuccess) {
@@ -1243,12 +1254,14 @@ ErrorType SemanticMapManager::GetLocalLaneUsingLaneIds(
   decimal_t arc_len;
   long_lane.GetArcLengthByVecPosition(state.vec_position, &arc_len);
 
+  // 在 Lane 合法范围内裁取后向/前向窗口，并按 1 m 步长采样。
   vec_Vecf<2> samples;
   decimal_t acc_dist_tmp;
   decimal_t sample_start = std::max(0.0, arc_len - backward_length);
   decimal_t sample_end = std::min(arc_len + forward_length, long_lane.end());
   SampleLane(long_lane, sample_start, sample_end, 1.0, &samples, &acc_dist_tmp);
 
+  // 按 is_high_quality 选择正则拟合或直接插值生成最终 Lane。
   if (kSuccess != GetLaneBySampledPoints(samples, is_high_quality, lane)) {
     return kWrongStatus;
   }
@@ -1261,6 +1274,7 @@ ErrorType SemanticMapManager::GetRefLaneForStateByBehavior(
     const LateralBehavior &behavior, const decimal_t &max_forward_len,
     const decimal_t &max_back_len, const bool is_high_quality,
     common::Lane *lane) const {
+  // 先结合位置和航向匹配当前 Lane；navi_path 当前在最近 Lane 函数中不生效。
   Vec3f state_3dof(state.vec_position(0), state.vec_position(1), state.angle);
   int current_lane_id;
   decimal_t distance_to_lane;
@@ -1271,10 +1285,12 @@ ErrorType SemanticMapManager::GetRefLaneForStateByBehavior(
     return kWrongStatus;
   }
 
+  // 状态离所选 Lane 中心线超过 2 m 时拒绝构造参考 Lane。
   if (distance_to_lane > max_distance_to_lane_) {
     return kWrongStatus;
   }
 
+  // 根据 LK/LCL/LCR 把当前 Lane 转换为实际目标 Lane ID。
   int target_lane_id;
   if (GetTargetLaneId(current_lane_id, behavior, &target_lane_id) != kSuccess) {
     // printf(
@@ -1284,18 +1300,18 @@ ErrorType SemanticMapManager::GetRefLaneForStateByBehavior(
     return kWrongStatus;
   }
 
+  // fast LUT 命中目标 segment 时，直接返回包含它的 local Lane 中 ID 最小者。
   if (agent_config_info_.enable_fast_lane_lut && has_fast_lut_) {
     if (segment_to_local_lut_.end() !=
         segment_to_local_lut_.find(target_lane_id)) {
-      // * here we just select the first local lane from several candidates
+      // 多个候选仅取 set.begin，不使用 state、navi_path 或请求的前后长度区分。
       int id = *segment_to_local_lut_.at(target_lane_id).begin();
       *lane = local_lanes_.at(id);
       return kSuccess;
     }
   }
 
-  // ~ the reflane length should be consist with maximum speed and maximum
-  // ~ forward simulation time, the current setup is for 30m/s x 7.5s forward
+  // fast LUT 未命中时动态沿目标 Lane 拓扑拼接指定前后长度的 1 m 间隔样本。
   vec_Vecf<2> samples;
   if (GetLocalLaneSamplesByState(state, target_lane_id, navi_path,
                                  max_forward_len, max_back_len,
@@ -1304,6 +1320,7 @@ ErrorType SemanticMapManager::GetRefLaneForStateByBehavior(
     return kWrongStatus;
   }
 
+  // 最后按质量开关把局部样本生成连续参考 Lane。
   if (kSuccess != GetLaneBySampledPoints(samples, is_high_quality, lane)) {
     return kWrongStatus;
   }
@@ -1315,6 +1332,7 @@ ErrorType SemanticMapManager::GetLaneBySampledPoints(
     const vec_Vecf<2> &samples, const bool &is_high_quality,
     common::Lane *lane) const {
   if (is_high_quality) {
+    // 高质量路径以累计相邻点弦长为参数，固定生成 20 个均匀 breaks。
     double d = 0.0;
     std::vector<decimal_t> para;
     para.push_back(d);
@@ -1331,12 +1349,14 @@ ErrorType SemanticMapManager::GetLaneBySampledPoints(
     Eigen::ArrayXf breaks =
         Eigen::ArrayXf::LinSpaced(num_segments, para.front(), para.back());
 
+    // 使用固定 1e6 正则系数执行样本拟合。
     const decimal_t regulator = (double)1e6;
     if (common::LaneGenerator::GetLaneBySampleFitting(
             samples, para, breaks, regulator, lane) != kSuccess) {
       return kWrongStatus;
     }
   } else {
+    // 普通质量路径直接由样本点生成 Lane，不做额外正则拟合。
     if (common::LaneGenerator::GetLaneBySamplePoints(samples, lane) !=
         kSuccess) {
       return kWrongStatus;
@@ -1352,7 +1372,9 @@ ErrorType SemanticMapManager::SampleLane(const common::Lane &lane,
                                          vec_E<Vecf<2>> *samples,
                                          decimal_t *accum_dist) const {
   Vecf<2> pt;
+  // 终点 s1 不包含在输出中；samples 不清空，accum_dist 也不在入口初始化。
   for (decimal_t s = s0; s < s1; s += step) {
+    // Lane 查询错误码被忽略，仍把 pt 追加并按名义 step 累计距离。
     lane.GetPositionByArcLength(s, &pt);
     samples->push_back(pt);
     (*accum_dist) += step;
@@ -1363,10 +1385,12 @@ ErrorType SemanticMapManager::SampleLane(const common::Lane &lane,
 ErrorType SemanticMapManager::GetTargetLaneId(const int lane_id,
                                               const LateralBehavior &behavior,
                                               int *target_lane_id) const {
+  // 当前 Lane 必须存在于局部 SemanticLaneSet。
   auto it = semantic_lane_set_.semantic_lanes.find(lane_id);
   if (it == semantic_lane_set_.semantic_lanes.end()) {
     return kWrongStatus;
   } else {
+    // Undefined 与 LK 都保持当前 Lane；左右换道要求对应 change_avbl 为 true。
     if (behavior == common::LateralBehavior::kLaneKeeping ||
         behavior == common::LateralBehavior::kUndefined) {
       *target_lane_id = lane_id;
@@ -1383,6 +1407,7 @@ ErrorType SemanticMapManager::GetTargetLaneId(const int lane_id,
         return kWrongStatus;
       }
     } else {
+      // release 构建关闭 assert 后会继续执行并最终返回成功，但输出可能未写。
       assert(false);
     }
   }

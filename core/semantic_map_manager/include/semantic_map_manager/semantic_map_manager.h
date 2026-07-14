@@ -120,6 +120,7 @@ class SemanticMapManager {
                                      const std::vector<int> &path,
                                      int *num_lane_changes, bool *res) const;
 
+  /// 先匹配当前/目标 Lane，再从 fast LUT 或动态前后拓展样本构造行为参考 Lane。
   ErrorType GetRefLaneForStateByBehavior(const common::State &state,
                                          const std::vector<int> &navi_path,
                                          const LateralBehavior &behavior,
@@ -127,9 +128,12 @@ class SemanticMapManager {
                                          const decimal_t &max_back_len,
                                          const bool is_high_quality,
                                          common::Lane *lane) const;
+
+  /// 把 LK/Undefined 映射当前 Lane，把可用 LCL/LCR 映射到对应相邻 Lane ID。
   ErrorType GetTargetLaneId(const int lane_id, const LateralBehavior &behavior,
                             int *target_lane_id) const;
 
+  /// 沿目标 Lane 的 father/child 拓扑前后扩展，拼接原始点并以 1 m 步长输出局部样本。
   ErrorType GetLocalLaneSamplesByState(const common::State &state,
                                        const int lane_id,
                                        const std::vector<int> &navi_path,
@@ -322,6 +326,7 @@ class SemanticMapManager {
                                  const decimal_t &arc_len_1,
                                  decimal_t *dist) const;
 
+  /// 在 [s0,s1) 以固定 step 查询 Lane 位置并追加样本，同时对 accum_dist 累加 step。
   ErrorType SampleLane(const common::Lane &lane, const decimal_t &s0,
                        const decimal_t &s1, const decimal_t &step,
                        vec_E<Vecf<2>> *samples, decimal_t *accum_dist) const;
@@ -338,6 +343,7 @@ class SemanticMapManager {
       const decimal_t &aggre_length, const std::vector<int> &path_to_node,
       std::vector<std::vector<int>> *all_paths);
 
+  /// 拼接给定 Lane ID 路径，围绕 state 截取前后长度并重新拟合连续 Lane。
   ErrorType GetLocalLaneUsingLaneIds(const common::State &state,
                                      const std::vector<int> &lane_ids,
                                      const decimal_t max_reflane_dist,
@@ -345,6 +351,7 @@ class SemanticMapManager {
                                      const bool &is_high_quality,
                                      common::Lane *lane);
 
+  /// 根据质量开关选择固定 20-break 正则拟合或直接样本点 Lane 生成。
   ErrorType GetLaneBySampledPoints(const vec_Vecf<2> &samples,
                                    const bool &is_high_quality,
                                    common::Lane *lane) const;
