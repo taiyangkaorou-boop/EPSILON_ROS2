@@ -85,7 +85,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.2c5d `core/common` 障碍物、SemanticBehavior 与 GridMap 可视化。
 - [x] M0.3a1 OnLaneFsPredictor 与驾驶风格参数查表。
 - [x] M0.3a2a 目标车道间隙状态与高级 LK/LC 单步传播。
-- [ ] M0.3a2b 标准单步传播、控制器辅助函数与车辆模型积分。
+- [x] M0.3a2b 标准单步传播、控制器辅助函数与车辆模型积分。
 - [ ] M0.3b BehaviorPlanner 地图接口、适配器与规划主类。
 - [ ] M0.3c SemanticMapManager 支撑组件与主类。
 - [ ] M0.4 SSC、车辆模型、物理仿真、playground 与配置。
@@ -531,3 +531,21 @@ release 中仍返回成功且保持旧参数；当前仓库没有实际调用 `M
 投影错误使用空分支，随后继续读取输出；其 Context-IDM `current_pos` 取目标 Lane s，
 而 leading/target_pos 取当前 Lane s，除非两 Lane 参数化严格一致，否则混用了坐标。
 所有辅助函数返回码基本被忽略，入口也不验证正 dt、轴距和参数有限性却固定返回成功。
+
+## 31. M0.3a2b：标准前向传播与控制器/车辆模型组合
+
+- 标准 `PropagateOnce` 把自车投影到 Lane，按速度截断前视距离后追踪 d=0，并按真实
+  前车或远端同速虚拟前车计算 IDM 期望速度；
+- 等效车辆长度通过投影前车两个保险杠和后轴，选择最小 s 近似后端，再加自车前悬，
+  使后轴位置差可用于 IDM 净间距；
+- `CalcualateSteer` 把前视 Frenet 点转换回世界坐标，用实际直线距离和航向误差执行
+  Pure Pursuit；普通/Context-IDM 控制器都使用车身标量速度而非高曲率下放大的 s_dot；
+- `CalculateDesiredState` 每步新建 IdealSteerModel，写入期望转角/速度，施加 Param 中
+  的动态限制并积分 dt，输出时间戳增加 dt。
+
+已确认的后续修复/验证点：无 Lane 重载声明接收 `desired_vel`，实现却完全忽略它，
+直接保持当前速度和转角；这是 OnLaneFsPredictor 无效 Lane 分支的实际语义。标准 Lane
+入口与 AdvancedLK 一样，在自车投影失败但前车投影成功时可能读取无效 current_fs。
+Pure Pursuit 不检查零世界前视距离；角度归一化只回绕一次。虚拟前车距离
+`100+100*v` 对足够负速度可落到后方。所有控制器/车辆模型错误码、输出指针、dt、轴距
+和有限性均未检查，入口固定成功；辅助函数名称还长期保留 `Calcualate` 拼写错误。

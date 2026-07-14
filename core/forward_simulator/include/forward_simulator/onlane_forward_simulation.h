@@ -357,6 +357,9 @@ class OnLaneForwardSimulation {
     return kSuccess;
   }
 
+  /**
+   * @brief 标准保持车道单步传播，等价于横向 offset=0 的 LK 控制流程。
+   */
   static ErrorType PropagateOnce(const common::StateTransformer& stf,
                                  const common::Vehicle& ego_vehicle,
                                  const Vehicle& leading_vehicle,
@@ -366,12 +369,12 @@ class OnLaneForwardSimulation {
     decimal_t wheelbase_len = ego_vehicle.param().wheel_base();
     auto sim_param = param;
 
-    // * Step I: Calculate steering
+    // 阶段一：投影自车，按速度自适应前视距离追踪 Lane 中心。
     bool steer_calculation_failed = false;
     common::FrenetState current_fs;
     if (stf.GetFrenetStateFromState(current_state, &current_fs) != kSuccess ||
         current_fs.vec_s[1] < -kEPS) {
-      // * ego Frenet state invalid or ego vehicle reverse gear
+      // 投影失败或 Frenet 纵向速度为负时保留当前转角。
       steer_calculation_failed = true;
     }
 
@@ -395,18 +398,15 @@ class OnLaneForwardSimulation {
     }
     sim_param.idm_param.kDesiredVelocity = std::max(0.0, sim_vel);
 
-    // * Step II: Calculate velocity
+    // 阶段二：按有无可投影前车选择虚拟/真实前车 IDM。
     common::FrenetState leading_fs;
     if (leading_vehicle.id() == kInvalidAgentId ||
         stf.GetFrenetStateFromState(leading_vehicle.state(), &leading_fs) !=
             kSuccess) {
-      // ~ Without leading vehicle
       CalcualateVelocityUsingIdm(current_state.velocity, dt, sim_param,
                                  &velocity);
     } else {
-      // ~ With leading vehicle
-      // * For IDM, vehicle length is subtracted to get the 'net' distance
-      // * between ego vehicle and the leading vehicle.
+      // 使用等效车长把后轴 s 差修正为保险杠净间距。
       decimal_t eqv_vehicle_len;
       GetIdmEquivalentVehicleLength(stf, ego_vehicle, leading_vehicle,
                                     leading_fs, &eqv_vehicle_len);
@@ -417,19 +417,23 @@ class OnLaneForwardSimulation {
           leading_vehicle.state().velocity, dt, sim_param, &velocity);
     }
 
-    // * Step III: Get desired state using vehicle kinematic model
+    // 阶段三：在 IdealSteerModel 动力学限制下积分输出状态。
     CalculateDesiredState(current_state, steer, velocity, wheelbase_len, dt,
                           sim_param, desired_state);
     return kSuccess;
   }
 
-  // ~ Propagate using const velocity and steer
+  /**
+   * @brief 无 Lane 时保持当前转角/当前速度，通过 IdealSteerModel 积分一步。
+   * @param desired_vel 名义期望速度；当前实现未使用该参数。
+   */
   static ErrorType PropagateOnce(const decimal_t& desired_vel,
                                  const common::Vehicle& ego_vehicle,
                                  const decimal_t& dt, const Param& param,
                                  State* desired_state) {
     common::State current_state = ego_vehicle.state();
     decimal_t wheelbase_len = ego_vehicle.param().wheel_base();
+    // baseline 忽略 desired_vel，控制速度直接取当前速度。
     decimal_t steer = current_state.steer;
     decimal_t velocity = current_state.velocity;
     CalculateDesiredState(current_state, steer, velocity, wheelbase_len, dt,
@@ -438,16 +442,15 @@ class OnLaneForwardSimulation {
   }
 
  private:
+  /**
+   * @brief 根据前车保险杠在参考 Lane 上的最近 s，计算 IDM 等效车辆长度。
+   */
   static ErrorType GetIdmEquivalentVehicleLength(
       const common::StateTransformer& stf, const common::Vehicle& ego_vehicle,
       const common::Vehicle& leading_vehicle,
       const common::FrenetState& leading_fs, decimal_t* eqv_vehicle_len) {
-    // Different from original IDM, we still use the center of rear axle as the
-    // vehicle position, since we need to calculate the 'net' distance between
-    // ego vehicle and leading vehicle, here we can get a equivalent leading
-    // vehicle's length for IDM
-
-    // In case the leading vehicle has an opposite angle due to MOT error
+    // 状态位置保留后轴中心；把自车前悬和前车后保险杠到后轴距离合并进 IDM 车长。
+    // 同时投影前车两个保险杠，缓解感知航向翻转时前后端交换问题。
     std::array<Vec2f, 2> leading_pts;
     leading_vehicle.RetBumperVertices(&leading_pts);
 
@@ -460,16 +463,20 @@ class OnLaneForwardSimulation {
       s_vec.push_back(fs_pt2(0));
     }
     s_vec.push_back(leading_fs.vec_s(0));
+    // 即使两个保险杠投影都失败，前车后轴 s 仍保证容器非空。
     decimal_t s_nearest_vtx = *(std::min_element(s_vec.begin(), s_vec.end()));
 
     decimal_t len_rb2r = fabs(leading_fs.vec_s(0) - s_nearest_vtx);
-    // ego rear-axle to front bumper + leading rear bumper to rear-axle
+    // 等效长度=自车后轴到前保险杠+前车最近后端到其后轴。
     *eqv_vehicle_len = ego_vehicle.param().length() / 2.0 +
                        ego_vehicle.param().d_cr() + len_rb2r;
 
     return kSuccess;
   }
 
+  /**
+   * @brief 将当前 Frenet s 加前视距离、目标 d 设为 offset，转换世界点后执行 Pure Pursuit。
+   */
   static ErrorType CalcualateSteer(const common::StateTransformer& stf,
                                    const State& current_state,
                                    const FrenetState& current_fs,
@@ -486,6 +493,7 @@ class OnLaneForwardSimulation {
       return kWrongStatus;
     }
 
+    // 使用真实世界直线距离和朝向误差，而不是直接使用 Frenet 前视 s。
     decimal_t look_ahead_dist =
         (dest_state.vec_position - current_state.vec_position).norm();
     decimal_t cur_to_dest_angle =
@@ -497,25 +505,23 @@ class OnLaneForwardSimulation {
     return kSuccess;
   }
 
-  // ~ Using leading vehicle
+  /// 使用真实前车位置/速度，通过 IDM 速度控制器积分得到下一步期望速度。
   static ErrorType CalcualateVelocityUsingIdm(
       const decimal_t& current_pos, const decimal_t& current_vel,
       const decimal_t& leading_pos, const decimal_t& leading_vel,
       const decimal_t& dt, const Param& param, decimal_t* velocity) {
     decimal_t leading_vel_fin = leading_vel;
     if (leading_vel < 0) {
+      // 前车倒车速度在纵向跟驰模型中按静止处理。
       leading_vel_fin = 0;
     }
-    // ~ note that we cannot use frenet state velocity for idm model, since the
-    // ~ velocity in the frenet state may be larger than body velocity if the
-    // ~ vehicle is in a highly curvy road (ref to the state transformer) which
-    // ~ cannot be directly fed back to body velocity.
+    // current_vel/leading_vel 使用车身标量速度；高曲率下 Frenet s_dot 可能大于车身速度。
     return control::IntelligentVelocityControl::CalculateDesiredVelocity(
         param.idm_param, current_pos, leading_pos, current_vel, leading_vel_fin,
         dt, velocity);
   }
 
-  // ~ Using virtual leading vehicle
+  /// 无真实前车时，在前方 `100+100*current_vel` 处构造同速虚拟前车。
   static ErrorType CalcualateVelocityUsingIdm(const decimal_t& current_vel,
                                               const decimal_t& dt,
                                               const Param& param,
@@ -526,6 +532,7 @@ class OnLaneForwardSimulation {
         current_vel, dt, velocity);
   }
 
+  /// 使用真实当前 Lane 前车和目标间隙状态执行 Context-IDM 速度控制。
   static ErrorType CalcualateVelocityUsingCtxIdm(
       const decimal_t& current_pos, const decimal_t& current_vel,
       const decimal_t& leading_pos, const decimal_t& leading_vel,
@@ -534,17 +541,16 @@ class OnLaneForwardSimulation {
       decimal_t* velocity) {
     decimal_t leading_vel_fin = leading_vel;
     if (leading_vel < 0) {
+      // 与普通 IDM 一致，负前车速度按零处理。
       leading_vel_fin = 0;
     }
-    // ~ note that we cannot use frenet state velocity for idm model, since the
-    // ~ velocity in the frenet state may be larger than body velocity if the
-    // ~ vehicle is in a highly curvy road (ref to the state transformer) which
-    // ~ cannot be directly fed back to body velocity.
+    // 输入速度使用车辆标量速度，避免高曲率 Frenet s_dot 的尺度放大。
     return control::ContextIntelligentVelocityControl::CalculateDesiredVelocity(
         param.idm_param, ctx_param, current_pos, leading_pos, target_pos,
         current_vel, leading_vel_fin, target_vel, dt, velocity);
   }
 
+  /// 无真实当前 Lane 前车时，以远端同速虚拟前车执行 Context-IDM。
   static ErrorType CalcualateVelocityUsingCtxIdm(
       const decimal_t& current_pos, const decimal_t& current_vel,
       const decimal_t& target_pos, const decimal_t& target_vel,
@@ -557,12 +563,16 @@ class OnLaneForwardSimulation {
         target_pos, current_vel, current_vel, target_vel, dt, velocity);
   }
 
+  /**
+   * @brief 构造 IdealSteerModel，施加所有动态限制并积分 dt，更新时间戳。
+   */
   static ErrorType CalculateDesiredState(const State& current_state,
                                          const decimal_t steer,
                                          const decimal_t velocity,
                                          const decimal_t wheelbase_len,
                                          const decimal_t dt, const Param& param,
                                          State* state) {
+    // 每个单步调用都新建模型，不跨周期保留积分器内部状态。
     simulator::IdealSteerModel model(
         wheelbase_len, param.idm_param.kAcceleration,
         param.idm_param.kHardBrakingDeceleration, param.max_lon_acc_jerk,
@@ -574,13 +584,6 @@ class OnLaneForwardSimulation {
     model.Step(dt);
     *state = model.state();
     state->time_stamp = current_state.time_stamp + dt;
-    // if (std::isnan(state->velocity)) {
-    //   printf(
-    //       "[DEBUG]state velocity %lf steer: %lf, velocity %lf output velocity
-    //       "
-    //       "%lf.\n",
-    //       current_state.velocity, steer, velocity, state->velocity);
-    // }
     return kSuccess;
   }
 };
