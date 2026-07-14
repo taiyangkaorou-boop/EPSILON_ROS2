@@ -80,7 +80,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.2c3b `core/common` MOBIL 换道收益与横向行为概率。
 - [x] M0.2c4 `core/common` FrenetPrimitive 双模式五次运动基元。
 - [x] M0.2c5a `core/common` 轨迹线条与通用 Marker 属性工具。
-- [ ] M0.2c5b `core/common` Pose、PointCloud 与基础几何 Marker。
+- [x] M0.2c5b `core/common` Pose、PointCloud 与基础几何 Marker。
 - [ ] M0.2c5c `core/common` Mesh、箭头、线条、文本与车辆 Marker。
 - [ ] M0.2c5d `core/common` 障碍物、SemanticBehavior 与 GridMap 可视化。
 - [ ] M0.3 语义地图、前向仿真、预测和行为规划。
@@ -442,3 +442,19 @@ pose；渐变函数忽略 `if_ascending`、不清空 colors，最后一点也达
 删除 Marker 没有继承被删对象 namespace，非空 namespace 时可能删不到。输出指针和
 NaN/Inf 均不检查；头文件使用 rclcpp::Time/Duration 但依赖间接包含。以上不影响规划
 结果，但会妨碍 ROS2 自包含编译、调试复现和长时间运行的消息大小稳定性。
+
+## 26. M0.2c5b：Pose、PointCloud 与基础几何 Marker
+
+- `[x,y,yaw]` 与 ROS Pose 双向转换固定 z/roll/pitch 为零；PoseStamped、PoseArray 和
+  PointCloud 固定使用 `map` frame，并在函数内通过临时 ROS clock 取当前时间；
+- State、Point、CircleArc 和 CircleArcBranch 可追加到旧式 `sensor_msgs/PointCloud`；
+  圆弧固定以 0.2 参数步长采样；
+- Point/Circle 可转换为 SPHERE/CYLINDER，OBB 可转换为带 yaw 的 CUBE，三维 AABB 或
+  上下界 Cube 可转换为单位姿态的轴对齐 CUBE；
+- 这些基础形状接口只构造几何/颜色/id，header、namespace 和生命周期多由上层补充。
+
+已确认的后续修复/验证点：PoseArray/PointCloud 和各 Marker 均保留旧数组内容；多层
+圆弧转换重复覆盖时间戳并复制 CircleArc 数组。CircleArc 固定正 0.2 步长与负弧长不
+兼容，可能死循环。Sphere 和两个 Cylinder 接口未设置单位 orientation，ROS 默认全零
+四元数无效；半径、尺度、AABB 长度和上下界顺序均不验证，默认构造的几何数组还可能
+未初始化。Pose 反解不验证四元数归一化；frame 与时间源硬编码，输出指针不检查。

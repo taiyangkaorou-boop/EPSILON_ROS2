@@ -355,11 +355,9 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Get the Ros Pose From 3 Dof State object
-   *
-   * @param state
-   * @param p_pose
-   * @return ErrorType
+   * @brief 将 `[x,y,yaw]` 转换为 z=0 的 ROS Pose。
+   * @param state 平面三自由度状态。
+   * @param p_pose 输出位置和由 yaw 构造的单位四元数。
    */
   static ErrorType GetRosPoseFrom3DofState(const Vec3f& state,
                                            geometry_msgs::msg::Pose* p_pose) {
@@ -367,6 +365,7 @@ class VisualizationUtil {
     p_pose->position.y = state(1);
     p_pose->position.z = 0.0;
 
+    // roll/pitch 固定为零，仅编码平面 yaw。
     tf2::Quaternion q;
     q.setRPY(0.0, 0.0, state(2));
 
@@ -378,11 +377,8 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Get the Ros Pose Stamped From Vec 3d object
-   *
-   * @param state
-   * @param p_pose_stamped
-   * @return ErrorType
+   * @brief 构造 map 坐标系、当前 ROS 时间戳的 PoseStamped。
+   * @note 时间戳来自函数内临时 RCL_ROS_TIME Clock，而非调用节点显式传入的时钟。
    */
   static ErrorType GetRosPoseStampedFromVec3d(
       const Vec3f& state, geometry_msgs::msg::PoseStamped* p_pose_stamped) {
@@ -395,11 +391,8 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Get the Ros Pose Array From State 3d Vector object
-   *
-   * @param states
-   * @param p_pose_array
-   * @return ErrorType
+   * @brief 把 `[x,y,yaw]` 序列追加到 map 坐标系 PoseArray。
+   * @note 不清空已有 poses。
    */
   static ErrorType GetRosPoseArrayFromState3dVector(
       const std::vector<Vec3f>& states,
@@ -415,11 +408,8 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Get the Ros Point Cloud From 3 Dof State Vector object
-   *
-   * @param states
-   * @param p_pc
-   * @return ErrorType
+   * @brief 把平面状态序列的 x/y 追加为 z=0 的旧式 sensor_msgs/PointCloud。
+   * @note yaw 被忽略，已有 points/channels 保留。
    */
   static ErrorType GetRosPointCloudFrom3DofStateVector(
       const std::vector<Vec3f>& states, sensor_msgs::msg::PointCloud* p_pc) {
@@ -435,33 +425,28 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Get the Ros Point Cloud From Circle Arc object
-   *
-   * @param arc
-   * @param p_pc
-   * @return ErrorType
+   * @brief 以固定 0.2 参数步长采样 CircleArc 并追加到 PointCloud。
+   * @note CircleArc 的负弧长需要负步长，但此处固定正 0.2，可能继承无法结束的风险。
    */
   static ErrorType GetRosPointCloudFromCircleArc(
       const CircleArc& arc, sensor_msgs::msg::PointCloud* p_pc) {
     p_pc->header.frame_id = "map";
     p_pc->header.stamp = rclcpp::Clock(RCL_ROS_TIME).now();
     std::vector<Vec3f> states;
+    // 下层状态转 PointCloud 会再次覆盖 header 时间戳。
     arc.GetSampledStates(0.2, &states);
     GetRosPointCloudFrom3DofStateVector(states, p_pc);
     return kSuccess;
   }
 
   /**
-   * @brief Get the Ros Point Cloud From Circle Arc Branch object
-   *
-   * @param arc_branch
-   * @param p_pc
-   * @return ErrorType
+   * @brief 遍历共享起点的所有 CircleArc 候选并把采样点追加到同一 PointCloud。
    */
   static ErrorType GetRosPointCloudFromCircleArcBranch(
       const CircleArcBranch& arc_branch, sensor_msgs::msg::PointCloud* p_pc) {
     p_pc->header.frame_id = "map";
     p_pc->header.stamp = rclcpp::Clock(RCL_ROS_TIME).now();
+    // circle_arc_vec() 返回副本；每条弧的转换还会重复更新时间戳。
     for (const auto& arc : arc_branch.circle_arc_vec()) {
       GetRosPointCloudFromCircleArc(arc, p_pc);
     }
@@ -469,11 +454,8 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Get the Ros Point Cloud From Point List object
-   *
-   * @param point_list
-   * @param p_pc
-   * @return ErrorType
+   * @brief 将 common::Point 列表逐项追加为 Point32 点云。
+   * @note Point 中附加 values 不参与可视化。
    */
   static ErrorType GetRosPointCloudFromPointList(
       const std::vector<common::Point>& point_list,
@@ -493,14 +475,8 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Get the Ros Marker Sphere Using Point object
-   *
-   * @param pt
-   * @param color
-   * @param scale
-   * @param id
-   * @param p_marker
-   * @return ErrorType
+   * @brief 由三维位置、颜色、尺度和 id 构造 SPHERE Marker。
+   * @note 不设置 header/namespace，且没有把默认全零 orientation 改为单位四元数。
    */
   static ErrorType GetRosMarkerSphereUsingPoint(
       const Vec3f& pt, const ColorARGB& color, const Vec3f& scale,
@@ -517,13 +493,8 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Get the Ros Marker Cylinder Using Circle object
-   *
-   * @param circle
-   * @param color
-   * @param id
-   * @param p_marker
-   * @return ErrorType
+   * @brief 将二维 Circle 构造成直径 `2*radius`、固定高度 1 的 CYLINDER Marker。
+   * @note 不设置 header/namespace/有效 orientation，也不验证半径非负。
    */
   static ErrorType GetRosMarkerCylinderUsingCircle(
       const Circle& circle, const ColorARGB& color, const int& id,
@@ -542,14 +513,8 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Get the Ros Marker Cylinder Using Point object
-   *
-   * @param pt
-   * @param scale
-   * @param color
-   * @param id
-   * @param p_marker
-   * @return ErrorType
+   * @brief 以 common::Point 为圆柱中心，使用调用方尺度/颜色/id 构造 CYLINDER。
+   * @note 不设置 header/namespace/有效 orientation。
    */
   static ErrorType GetRosMarkerCylinderUsingPoint(
       const Point& pt, const Vec3f& scale, const ColorARGB& color,
@@ -566,25 +531,16 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Get 3-Dof State From Ros Pose
-   *
-   * @param pose
-   * @param p_state
-   * @return ErrorType
+   * @brief 从 ROS Pose 提取平面 `[x,y,yaw]`。
+   * @note z、roll、pitch 被丢弃，输入四元数不做有限性或归一化检查。
    */
   static ErrorType Get3DofStateFromRosPose(const geometry_msgs::msg::Pose& pose,
                                            Vec3f* p_state) {
     (*p_state)(0) = pose.position.x;
     (*p_state)(1) = pose.position.y;
-    // the incoming geometry_msgs::msg::Quaternion is transformed to a tf::Quaterion
-    // tf2::Quaternion q;
-    // tf2::QuaternionMsgToTF(pose.orientation, q);
+    // 先把消息四元数转换为 tf2，再分解 roll/pitch/yaw。
     tf2::Quaternion q;
     tf2::fromMsg(pose.orientation, q);
-    // the tf2::Quaternion has a method to acess roll pitch and yaw
-    // double roll, pitch, yaw;
-    // tf::Matrix3x3(q).getRPY(roll, pitch, yaw);
-    // (*p_state)(2) = yaw;
     double roll, pitch, yaw;
     tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
     (*p_state)(2) = yaw;
@@ -592,13 +548,8 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Get the Ros Marker Cube Using Oriented Bounding Box 2D object
-   *
-   * @param obb
-   * @param color
-   * @param scale_z
-   * @param p_marker
-   * @return ErrorType
+   * @brief 将二维 OBB 挤出为指定高度的有向 CUBE Marker。
+   * @note OBB length 映射 scale.x，width 映射 scale.y，中心 z 固定为 0。
    */
   static ErrorType GetRosMarkerCubeUsingOrientedBoundingBox2D(
       const OrientedBoundingBox2D& obb, const ColorARGB& color,
@@ -615,15 +566,7 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Get the Ros Marker Cube Using Oriented Bounding Box 2 D With Offset
-   * Z object
-   *
-   * @param obb
-   * @param offset_z
-   * @param color
-   * @param scale_z
-   * @param p_marker
-   * @return ErrorType
+   * @brief 构造带固定中心高度 offset_z 的二维 OBB CUBE Marker。
    */
   static ErrorType GetRosMarkerCubeUsingOrientedBoundingBox2DWithOffsetZ(
       const OrientedBoundingBox2D& obb, const decimal_t offset_z,
@@ -642,12 +585,7 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Get the Ros Marker Cube Using Axis Aligned Bounding Box 3 D object
-   *
-   * @param aabb
-   * @param color
-   * @param p_marker
-   * @return ErrorType
+   * @brief 由中心坐标和三维总长度构造轴对齐 CUBE Marker。
    */
   static ErrorType GetRosMarkerCubeUsingAxisAlignedBoundingBox3D(
       const AxisAlignedBoundingBoxND<3>& aabb, const ColorARGB& color,
@@ -665,12 +603,8 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Get the Ros Marker Cube Using Axis Aligned Cube 3 D object
-   *
-   * @param aabb
-   * @param color
-   * @param p_marker
-   * @return ErrorType
+   * @brief 由整数上下界差和中点构造轴对齐 CUBE Marker。
+   * @note 尺度使用 `upper-lower`，不为离散闭区间额外加一个单元宽度。
    */
   static ErrorType GetRosMarkerCubeUsingAxisAlignedCube3D(
       const AxisAlignedCubeNd<int, 3>& aabb, const ColorARGB& color,
