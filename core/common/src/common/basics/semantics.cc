@@ -120,15 +120,18 @@ VehicleControlSignal::VehicleControlSignal(double acc, double steer_rate)
 VehicleControlSignal::VehicleControlSignal(common::State state)
     : acc(0.0), steer_rate(0.0), is_openloop(true), state(state) {}
 
+// 空元数据用于延迟加载地图尺寸与分辨率。
 GridMapMetaInfo::GridMapMetaInfo() {}
 
 GridMapMetaInfo::GridMapMetaInfo(const int w, const int h, const double res)
     : width(w), height(h), resolution(res) {
+  // 物理覆盖范围等于栅格数量乘以单格分辨率。
   w_metric = w * resolution;
   h_metric = h * resolution;
 }
 
 void GridMapMetaInfo::print() const {
+  // 同时输出离散尺寸与物理尺寸，便于检查分辨率配置。
   printf("GridMapMetaInfo:\n");
   printf(" -- width:%d\n", width);
   printf(" -- height:%d\n", height);
@@ -146,6 +149,7 @@ GridMapND<T, N_DIM>::GridMapND(
     const std::array<int, N_DIM> &dims_size,
     const std::array<decimal_t, N_DIM> &dims_resolution,
     const std::array<std::string, N_DIM> &dims_name) {
+  // 先保存结构元数据，再计算线性步长和元素总数，最后分配零填充数组。
   dims_size_ = dims_size;
   dims_resolution_ = dims_resolution;
   dims_name_ = dims_name;
@@ -159,10 +163,12 @@ GridMapND<T, N_DIM>::GridMapND(
 template <typename T, int N_DIM>
 ErrorType GridMapND<T, N_DIM>::GetValueUsingCoordinate(
     const std::array<int, N_DIM> &coord, T *val) const {
+  // 只有离散坐标读取接口会显式向调用方传播越界状态。
   if (!CheckCoordInRange(coord)) {
     // printf("[GridMapND] Out of range\n");
     return kWrongStatus;
   }
+  // 有效 N 维坐标通过预计算步长展开为底层连续数组下标。
   int idx = GetMonoIdxUsingNDimIdx(coord);
   *val = data_[idx];
   return kSuccess;
@@ -171,6 +177,7 @@ ErrorType GridMapND<T, N_DIM>::GetValueUsingCoordinate(
 template <typename T, int N_DIM>
 ErrorType GridMapND<T, N_DIM>::GetValueUsingGlobalPosition(
     const std::array<decimal_t, N_DIM> &p_w, T *val) const {
+  // 当前包装接口没有转发 GetValueUsingCoordinate 的错误码，这是既有 API 语义。
   std::array<int, N_DIM> coord = GetCoordUsingGlobalPosition(p_w);
   GetValueUsingCoordinate(coord, val);
   return kSuccess;
@@ -179,6 +186,7 @@ ErrorType GridMapND<T, N_DIM>::GetValueUsingGlobalPosition(
 template <typename T, int N_DIM>
 ErrorType GridMapND<T, N_DIM>::CheckIfEqualUsingGlobalPosition(
     const std::array<decimal_t, N_DIM> &p_w, const T &val_in, bool *res) const {
+  // 世界位置先离散化；越界通过 res=false 表达，而不是错误码。
   std::array<int, N_DIM> coord = GetCoordUsingGlobalPosition(p_w);
   T val;
   if (GetValueUsingCoordinate(coord, &val) != kSuccess) {
@@ -192,6 +200,7 @@ ErrorType GridMapND<T, N_DIM>::CheckIfEqualUsingGlobalPosition(
 template <typename T, int N_DIM>
 ErrorType GridMapND<T, N_DIM>::CheckIfEqualUsingCoordinate(
     const std::array<int, N_DIM> &coord, const T &val_in, bool *res) const {
+  // 保持与全局位置版本相同的“错误转布尔值”语义。
   T val;
   if (GetValueUsingCoordinate(coord, &val) != kSuccess) {
     *res = false;
@@ -204,6 +213,7 @@ ErrorType GridMapND<T, N_DIM>::CheckIfEqualUsingCoordinate(
 template <typename T, int N_DIM>
 ErrorType GridMapND<T, N_DIM>::SetValueUsingCoordinate(
     const std::array<int, N_DIM> &coord, const T &val) {
+  // 写入前检查范围，防止非法下标访问底层数组。
   if (!CheckCoordInRange(coord)) {
     // printf("[GridMapND] Out of range\n");
     return kWrongStatus;
@@ -216,6 +226,7 @@ ErrorType GridMapND<T, N_DIM>::SetValueUsingCoordinate(
 template <typename T, int N_DIM>
 ErrorType GridMapND<T, N_DIM>::SetValueUsingGlobalPosition(
     const std::array<decimal_t, N_DIM> &p_w, const T &val) {
+  // 当前包装接口与读取版本一致，不转发内部写入的越界错误码。
   std::array<int, N_DIM> coord = GetCoordUsingGlobalPosition(p_w);
   SetValueUsingCoordinate(coord, val);
   return kSuccess;
@@ -224,6 +235,7 @@ ErrorType GridMapND<T, N_DIM>::SetValueUsingGlobalPosition(
 template <typename T, int N_DIM>
 std::array<int, N_DIM> GridMapND<T, N_DIM>::GetCoordUsingGlobalPosition(
     const std::array<decimal_t, N_DIM> &p_w) const {
+  // round 将位置映射到最近栅格坐标，而不是包含该位置的 floor 栅格。
   std::array<int, N_DIM> coord = {};
   for (int i = 0; i < N_DIM; ++i) {
     coord[i] = std::round((p_w[i] - origin_[i]) / dims_resolution_[i]);
@@ -235,6 +247,7 @@ template <typename T, int N_DIM>
 std::array<decimal_t, N_DIM>
 GridMapND<T, N_DIM>::GetRoundedPosUsingGlobalPosition(
     const std::array<decimal_t, N_DIM> &p_w) const {
+  // 先吸附到离散坐标，再按 origin + index*resolution 恢复世界位置。
   std::array<int, N_DIM> coord = {};
   for (int i = 0; i < N_DIM; ++i) {
     coord[i] = std::round((p_w[i] - origin_[i]) / dims_resolution_[i]);
@@ -250,6 +263,7 @@ template <typename T, int N_DIM>
 ErrorType GridMapND<T, N_DIM>::GetGlobalPositionUsingCoordinate(
     const std::array<int, N_DIM> &coord,
     std::array<decimal_t, N_DIM> *p_w) const {
+  // 逐维执行线性坐标变换；当前不校验输入坐标是否位于地图范围内。
   auto ptr = p_w->data();
   for (int i = 0; i < N_DIM; ++i) {
     *(ptr + i) = coord[i] * dims_resolution_[i] + origin_[i];
@@ -260,6 +274,7 @@ ErrorType GridMapND<T, N_DIM>::GetGlobalPositionUsingCoordinate(
 template <typename T, int N_DIM>
 ErrorType GridMapND<T, N_DIM>::GetCoordUsingGlobalMetricOnSingleDim(
     const decimal_t &metric, const int &i, int *idx) const {
+  // 单维转换与 N 维版本保持相同的 round 规则。
   *idx = std::round((metric - origin_[i]) / dims_resolution_[i]);
   return kSuccess;
 }
@@ -267,6 +282,7 @@ ErrorType GridMapND<T, N_DIM>::GetCoordUsingGlobalMetricOnSingleDim(
 template <typename T, int N_DIM>
 ErrorType GridMapND<T, N_DIM>::GetGlobalMetricUsingCoordOnSingleDim(
     const int &idx, const int &i, decimal_t *metric) const {
+  // 单维世界坐标由原点、下标和分辨率线性计算。
   *metric = idx * dims_resolution_[i] + origin_[i];
   return kSuccess;
 }
@@ -274,6 +290,7 @@ ErrorType GridMapND<T, N_DIM>::GetGlobalMetricUsingCoordOnSingleDim(
 template <typename T, int N_DIM>
 bool GridMapND<T, N_DIM>::CheckCoordInRange(
     const std::array<int, N_DIM> &coord) const {
+  // N 维坐标只有在每一维都位于半开区间内时才有效。
   for (int i = 0; i < N_DIM; ++i) {
     if (coord[i] < 0 || coord[i] >= dims_size_[i]) {
       return false;
@@ -285,12 +302,14 @@ bool GridMapND<T, N_DIM>::CheckCoordInRange(
 template <typename T, int N_DIM>
 bool GridMapND<T, N_DIM>::CheckCoordInRangeOnSingleDim(const int &idx,
                                                        const int &i) const {
+  // 调用方负责保证维度 i 合法，本函数只检查该维的坐标值。
   return (idx >= 0) && (idx < dims_size_[i]);
 }
 
 template <typename T, int N_DIM>
 int GridMapND<T, N_DIM>::GetMonoIdxUsingNDimIdx(
     const std::array<int, N_DIM> &idx) const {
+  // 第 0 维连续存储，其他维通过 dims_step_ 累加偏移。
   int mono_idx = 0;
   for (int i = 0; i < N_DIM; ++i) {
     mono_idx += dims_step_[i] * idx[i];
@@ -301,6 +320,7 @@ int GridMapND<T, N_DIM>::GetMonoIdxUsingNDimIdx(
 template <typename T, int N_DIM>
 std::array<int, N_DIM> GridMapND<T, N_DIM>::GetNDimIdxUsingMonoIdx(
     const int &idx) const {
+  // 从最高维开始做整除和取余，逐步还原各维坐标。
   std::array<int, N_DIM> idx_nd = {};
   int tmp = idx;
   for (int i = N_DIM - 1; i >= 0; --i) {
@@ -313,6 +333,7 @@ std::array<int, N_DIM> GridMapND<T, N_DIM>::GetNDimIdxUsingMonoIdx(
 template <typename T, int N_DIM>
 ErrorType GridMapND<T, N_DIM>::SetNDimSteps(
     const std::array<int, N_DIM> &dims_size) {
+  // 步长为之前所有维度尺寸的累乘，第 0 维步长固定为 1。
   int step = 1;
   for (int i = 0; i < N_DIM; ++i) {
     dims_step_[i] = step;
@@ -324,6 +345,7 @@ ErrorType GridMapND<T, N_DIM>::SetNDimSteps(
 template <typename T, int N_DIM>
 ErrorType GridMapND<T, N_DIM>::SetDataSize(
     const std::array<int, N_DIM> &dims_size) {
+  // 理论元素数为各维尺寸乘积；当前实现实际读取成员 dims_size_。
   int total_ele_num = 1;
   for (int i = 0; i < N_DIM; ++i) {
     total_ele_num = total_ele_num * dims_size_[i];
@@ -332,6 +354,7 @@ ErrorType GridMapND<T, N_DIM>::SetDataSize(
   return kSuccess;
 }
 
+// 显式实例化项目中使用的 2D/3D uint8 和 int 栅格类型。
 template class GridMapND<uint8_t, 2>;
 template class GridMapND<uint8_t, 3>;
 template class GridMapND<int, 2>;

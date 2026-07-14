@@ -377,6 +377,7 @@ struct VehicleControlSignalSet {
   std::unordered_map<int, VehicleControlSignal> signal_set;
 };
 
+/// 二维栅格地图的尺寸、分辨率和物理覆盖范围元数据。
 struct GridMapMetaInfo {
   int width = 0;
   int height = 0;
@@ -385,34 +386,38 @@ struct GridMapMetaInfo {
   double h_metric = 0;
 
   /**
-   * @brief Construct a new Grid Map Meta Info object
+   * @brief 构造全部字段为零的空元数据。
    */
   GridMapMetaInfo();
 
   /**
-   * @brief Construct a new Grid Map Meta Info object
+   * @brief 使用栅格宽高和统一分辨率构造二维地图元数据。
    *
-   * @param w width
-   * @param h height
-   * @param res resolution
+   * @param w x/宽度方向栅格数量。
+   * @param h y/高度方向栅格数量。
+   * @param res 每个栅格的物理分辨率。
    */
   GridMapMetaInfo(const int w, const int h, const double res);
 
   /**
-   * @brief Print info
+   * @brief 输出栅格数量、分辨率和物理尺寸，供调试使用。
    */
   void print() const;
 };
 
 /**
- * @brief Occupancy grid map
+ * @brief 使用一维连续数组存储的 N 维规则栅格地图。
  *
- * @tparam T Data type of the grid map
- * @tparam N_DIM Dimension of the grid map
+ * 第 0 维步长为 1，随后各维步长为之前维度尺寸的累乘，因此第 0 维在内存中
+ * 连续变化最快。世界位置与栅格坐标之间使用 round 而不是 floor 转换。
+ *
+ * @tparam T 单栅格数据类型。
+ * @tparam N_DIM 栅格维数。
  */
 template <typename T, int N_DIM>
 class GridMapND {
  public:
+  /// 传统占据栅格值；FREE 与 UNKNOWN 当前同为 0，调用方无法仅凭数值区分二者。
   enum ValType {
     OCCUPIED = 70,
     // FREE = 102,
@@ -422,247 +427,267 @@ class GridMapND {
   };
 
   /**
-   * @brief Construct a new GridMapND object
+   * @brief 默认构造空地图；尺寸、分辨率和原点需由调用方继续设置。
    *
    */
   GridMapND();
 
   /**
-   * @brief Construct a new GridMapND object
+   * @brief 使用各维尺寸、分辨率和名称构造零填充地图，原点为全零。
    *
-   * @param dims_size size of each dimension
-   * @param dims_resolution resolution of each dimension
-   * @param dims_name name of each dimension
+   * @param dims_size 各维栅格数量。
+   * @param dims_resolution 各维物理分辨率，必须为非零正值。
+   * @param dims_name 各维语义名称，例如 x、y、t。
    */
   GridMapND(const std::array<int, N_DIM> &dims_size,
             const std::array<decimal_t, N_DIM> &dims_resolution,
             const std::array<std::string, N_DIM> &dims_name);
 
+  /// 返回全部维度尺寸副本。
   inline std::array<int, N_DIM> dims_size() const { return dims_size_; }
+  /// 返回指定维度尺寸，越界时由 std::array::at 抛出异常。
   inline int dims_size(const int &dim) const { return dims_size_.at(dim); }
+  /// 返回 N 维坐标转一维索引使用的步长数组。
   inline std::array<int, N_DIM> dims_step() const { return dims_step_; }
+  /// 返回指定维度索引步长，越界时抛出异常。
   inline int dims_step(const int &dim) const { return dims_step_.at(dim); }
+  /// 返回全部维度物理分辨率副本。
   inline std::array<decimal_t, N_DIM> dims_resolution() const {
     return dims_resolution_;
   }
+  /// 返回指定维度物理分辨率，越界时抛出异常。
   inline decimal_t dims_resolution(const int &dim) const {
     return dims_resolution_.at(dim);
   }
+  /// 返回全部维度名称副本。
   inline std::array<std::string, N_DIM> dims_name() const { return dims_name_; }
+  /// 返回指定维度名称，越界时抛出异常。
   inline std::string dims_name(const int &dim) const {
     return dims_name_.at(dim);
   }
+  /// 返回各维坐标 0 对应的世界原点副本。
   inline std::array<decimal_t, N_DIM> origin() const { return origin_; }
+  /// 返回尺寸累乘得到的理论数据元素数量。
   inline int data_size() const { return data_size_; }
+  /// 返回底层数据 vector 的只读指针；对象生命周期内有效。
   inline const std::vector<T> *data() const { return &data_; }
+  /// 按一维下标返回数据，不执行边界检查。
   inline T data(const int &i) const { return data_[i]; };
+  /// 返回可写底层连续数据指针，调用方必须保证不越过 data_.size()。
   inline T *get_data_ptr() { return data_.data(); }
+  /// 返回只读底层连续数据指针。
   inline const T *data_ptr() const { return data_.data(); }
 
+  /// 设置地图世界原点，不移动或重采样已有数据。
   inline void set_origin(const std::array<decimal_t, N_DIM> &origin) {
     origin_ = origin;
   }
+  /// 更新维度尺寸、索引步长和理论 data_size；当前不会同步调整 data_ 长度。
   inline void set_dims_size(const std::array<int, N_DIM> &dims_size) {
     dims_size_ = dims_size;
     SetNDimSteps(dims_size);
     SetDataSize(dims_size);
   }
+  /// 设置各维分辨率，不重投影已有数据。
   inline void set_dims_resolution(
       const std::array<decimal_t, N_DIM> &dims_resolution) {
     dims_resolution_ = dims_resolution;
   }
+  /// 设置各维语义名称。
   inline void set_dims_name(const std::array<std::string, N_DIM> &dims_name) {
     dims_name_ = dims_name;
   }
+  /// 直接替换底层数据，不检查输入长度是否等于 data_size_。
   inline void set_data(const std::vector<T> &in) { data_ = in; }
 
   /**
-   * @brief Set all data in array to 0
+   * @brief 按理论 data_size_ 重新分配底层数组并全部置零。
    */
   inline void clear_data() { data_ = std::vector<T>(data_size_, 0); }
 
   /**
-   * @brief Fill all data in array using value
+   * @brief 按理论 data_size_ 重新分配底层数组并填充指定值。
    *
-   * @param val input value
+   * @param val 每个栅格写入的值。
    */
   inline void fill_data(const T &val) {
     data_ = std::vector<T>(data_size_, val);
   }
 
   /**
-   * @brief Get the Value Using Coordinate
+   * @brief 使用 N 维离散坐标读取栅格值。
    *
-   * @param coord Input coordinate
-   * @param val Output value
-   * @return ErrorType
+   * @param coord 输入离散坐标。
+   * @param val 输出栅格值。
+   * @return ErrorType 坐标有效返回 kSuccess，否则返回 kWrongStatus。
    */
   ErrorType GetValueUsingCoordinate(const std::array<int, N_DIM> &coord,
                                     T *val) const;
 
   /**
-   * @brief Get the Value Using Global Position
+   * @brief 将世界位置四舍五入到最近栅格后读取值。
    *
-   * @param p_w Input global position
-   * @param val Output value
-   * @return ErrorType
+   * @param p_w 输入世界位置。
+   * @param val 输出栅格值。
+   * @return ErrorType 当前实现忽略内部越界状态并固定返回 kSuccess。
    */
   ErrorType GetValueUsingGlobalPosition(const std::array<decimal_t, N_DIM> &p_w,
                                         T *val) const;
 
   /**
-   * @brief Check if the input value is equal to the value in map
+   * @brief 判断世界位置对应栅格是否等于给定值。
    *
-   * @param p_w Input global position
-   * @param val_in Input value
-   * @param res Result
-   * @return ErrorType
+   * @param p_w 输入世界位置。
+   * @param val_in 待比较值。
+   * @param res 输出比较结果；越界时为 false。
+   * @return ErrorType 当前实现固定返回 kSuccess，越界通过 res=false 表达。
    */
   ErrorType CheckIfEqualUsingGlobalPosition(
       const std::array<decimal_t, N_DIM> &p_w, const T &val_in,
       bool *res) const;
 
   /**
-   * @brief Check if the input value is equal to the value in map
+   * @brief 判断离散坐标对应栅格是否等于给定值。
    *
-   * @param coord Input coordinate
-   * @param val_in Input value
-   * @param res Result
-   * @return ErrorType
+   * @param coord 输入离散坐标。
+   * @param val_in 待比较值。
+   * @param res 输出比较结果；越界时为 false。
+   * @return ErrorType 当前实现固定返回 kSuccess。
    */
   ErrorType CheckIfEqualUsingCoordinate(const std::array<int, N_DIM> &coord,
                                         const T &val_in, bool *res) const;
 
   /**
-   * @brief Set the Value Using Coordinate
+   * @brief 使用 N 维离散坐标写入栅格值。
    *
-   * @param coord Coordinate of the map
-   * @param val Input value
-   * @return ErrorType
+   * @param coord 输入离散坐标。
+   * @param val 待写入值。
+   * @return ErrorType 坐标有效返回 kSuccess，否则返回 kWrongStatus。
    */
   ErrorType SetValueUsingCoordinate(const std::array<int, N_DIM> &coord,
                                     const T &val);
 
   /**
-   * @brief Set the Value Using Global Position
+   * @brief 将世界位置四舍五入到最近栅格后写入值。
    *
-   * @param p_w Global position
-   * @param val Input value
-   * @return ErrorType
+   * @param p_w 输入世界位置。
+   * @param val 待写入值。
+   * @return ErrorType 当前实现忽略内部越界状态并固定返回 kSuccess。
    */
   ErrorType SetValueUsingGlobalPosition(const std::array<decimal_t, N_DIM> &p_w,
                                         const T &val);
 
   /**
-   * @brief Get the Coordinate Using Global Position
+   * @brief 将世界位置按各维分辨率四舍五入为离散坐标。
    *
-   * @param p_w Input global position
-   * @return std::array<int, N_DIM> Output coordinate
+   * @param p_w 输入世界位置。
+   * @return std::array<int, N_DIM> 离散坐标；不保证位于地图范围内。
    */
   std::array<int, N_DIM> GetCoordUsingGlobalPosition(
       const std::array<decimal_t, N_DIM> &p_w) const;
 
   /**
-   * @brief Get the Rounded Position Using Global Position object
+   * @brief 将世界位置吸附到最近栅格中心对应的世界位置。
    *
-   * @param p_w Input global position
-   * @return std::array<decimal_t, N_DIM> Output global position
+   * @param p_w 输入世界位置。
+   * @return std::array<decimal_t, N_DIM> 最近离散坐标对应的世界位置。
    */
   std::array<decimal_t, N_DIM> GetRoundedPosUsingGlobalPosition(
       const std::array<decimal_t, N_DIM> &p_w) const;
 
   /**
-   * @brief Get the Global Position Using Coordinate
+   * @brief 将离散坐标转换为世界位置。
    *
-   * @param coord Input coordinate
-   * @param p_w Output global position
-   * @return ErrorType
+   * @param coord 输入离散坐标；当前实现不检查范围。
+   * @param p_w 输出世界位置。
+   * @return ErrorType 当前实现固定返回 kSuccess。
    */
   ErrorType GetGlobalPositionUsingCoordinate(
       const std::array<int, N_DIM> &coord,
       std::array<decimal_t, N_DIM> *p_w) const;
 
   /**
-   * @brief Get the Coordinate Using Global Metric On Single Dimension
+   * @brief 将单维世界坐标四舍五入为该维离散下标。
    *
-   * @param metric Input global 1-dim position
-   * @param i Dimension
-   * @param idx Output 1-d coordinate
-   * @return ErrorType
+   * @param metric 输入单维世界坐标。
+   * @param i 维度下标。
+   * @param idx 输出离散下标；不检查是否在范围内。
+   * @return ErrorType 当前实现固定返回 kSuccess。
    */
   ErrorType GetCoordUsingGlobalMetricOnSingleDim(const decimal_t &metric,
                                                  const int &i, int *idx) const;
 
   /**
-   * @brief Get the Global Metric Using Coordinate On Single Dim object
+   * @brief 将单维离散下标转换为世界坐标。
    *
-   * @param idx Input 1-d coordinate
-   * @param i Dimension
-   * @param metric Output 1-d position
-   * @return ErrorType
+   * @param idx 输入离散下标。
+   * @param i 维度下标。
+   * @param metric 输出世界坐标。
+   * @return ErrorType 当前实现固定返回 kSuccess。
    */
   ErrorType GetGlobalMetricUsingCoordOnSingleDim(const int &idx, const int &i,
                                                  decimal_t *metric) const;
 
   /**
-   * @brief Check if the input coordinate is in map range
+   * @brief 检查 N 维坐标的每个分量是否位于 `[0, dims_size)`。
    *
-   * @param coord Input coordinate
-   * @return true In range
-   * @return false Out of range
+   * @param coord 输入离散坐标。
+   * @return true 所有维度均有效。
+   * @return false 至少一维越界。
    */
   bool CheckCoordInRange(const std::array<int, N_DIM> &coord) const;
 
   /**
-   * @brief Check if the input 1-d coordinate is in map range
+   * @brief 检查单维离散下标是否有效。
    *
-   * @param idx Input 1-d coordinate
-   * @param i Dimension
-   * @return true In range
-   * @return false Out of range
+   * @param idx 输入离散下标。
+   * @param i 维度下标；调用方必须保证 i 有效。
+   * @return true 下标位于 `[0, dims_size[i])`。
+   * @return false 下标越界。
    */
   bool CheckCoordInRangeOnSingleDim(const int &idx, const int &i) const;
 
   /**
-   * @brief Get the mono index using N-dim index
+   * @brief 使用预计算步长把 N 维下标展开为一维下标。
    *
-   * @param idx Input N-dim index
-   * @return int Output 1-dim index
+   * @param idx 输入 N 维下标；当前实现不检查范围。
+   * @return int 底层 data_ 的一维下标。
    */
   int GetMonoIdxUsingNDimIdx(const std::array<int, N_DIM> &idx) const;
 
   /**
-   * @brief Get N-dim index using mono index
+   * @brief 使用步长除法把一维下标还原为 N 维下标。
    *
-   * @param idx Input mono index
-   * @return std::array<int, N_DIM> Output N-dim index
+   * @param idx 输入一维下标；当前实现不检查范围。
+   * @return std::array<int, N_DIM> 还原后的 N 维下标。
    */
   std::array<int, N_DIM> GetNDimIdxUsingMonoIdx(const int &idx) const;
 
  private:
   /**
-   * @brief Set the steps of N-dim array
-   * @brief E.g. A x-y-z map's steps are {1, x, x*y}
+   * @brief 根据各维尺寸计算一维展开步长，例如 x-y-z 为 `{1, x, x*y}`。
    *
-   * @param dims_size Input the size of dimension
-   * @return ErrorType
+   * @param dims_size 各维栅格数量。
+   * @return ErrorType 当前实现固定返回 kSuccess。
    */
   ErrorType SetNDimSteps(const std::array<int, N_DIM> &dims_size);
 
   /**
-   * @brief Get the Data Size
+   * @brief 计算各维尺寸乘积并保存为理论数据元素数量。
    *
-   * @param dims_size Input the size of dimension
-   * @return ErrorType
+   * @param dims_size 各维栅格数量。
+   * @return ErrorType 当前实现固定返回 kSuccess。
    */
   ErrorType SetDataSize(const std::array<int, N_DIM> &dims_size);
 
+  // 网格结构元数据：尺寸、线性步长、分辨率、维度名称和世界原点。
   std::array<int, N_DIM> dims_size_;
   std::array<int, N_DIM> dims_step_;
   std::array<decimal_t, N_DIM> dims_resolution_;
   std::array<std::string, N_DIM> dims_name_;
   std::array<decimal_t, N_DIM> origin_;
 
+  // data_size_ 是尺寸乘积；data_ 的实际长度可被 set_data 独立改变。
   int data_size_{0};
   std::vector<T> data_;
 };

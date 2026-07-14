@@ -62,7 +62,8 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.2a1 `core/common` 通用配置、宏、计时、线程池、色图与工具函数。
 - [x] M0.2a2 `core/common` 几何类型与碰撞/投影工具。
 - [x] M0.2a3a `semantics` 车辆、行为概率、语义车辆与控制信号。
-- [ ] M0.2a3b `semantics` 栅格地图、车道、障碍物与 KD-tree 适配。
+- [x] M0.2a3b1 `semantics` GridMapMetaInfo/GridMapND。
+- [ ] M0.2a3b2 `semantics` 车道、障碍物与 KD-tree 适配。
 - [ ] M0.2a3c `semantics` SSC cube/corridor、交通信号与枚举工具。
 - [ ] M0.2a4 `core/common` 状态与车道类型。
 - [ ] M0.2b `core/common` 数学、样条、轨迹与圆弧。
@@ -118,3 +119,20 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 这里的 `ProbDistOfLatBehaviors` 是当前 baseline 将不确定性压缩为有限横向意图的主要
 接口。BR-EUDM 后续会通过 adapter 扩展跨周期 intent/style belief，但必须保持旧接口
 可配置兼容，不能让 MPDM/EUDM 对照因消息结构差异失去公平性。
+
+## 8. M0.2a3b1：N 维规则栅格
+
+`GridMapND<T, N_DIM>` 使用一维 `std::vector` 保存 N 维规则栅格，第 0 维在内存中
+连续变化最快，步长依次为 `{1, size[0], size[0]*size[1], ...}`。世界位置转换使用
+`round((position-origin)/resolution)`，因此得到的是最近栅格，而不是包含该位置的
+`floor` 栅格。
+
+需要保留到 baseline 修复阶段处理的既有接口风险：
+
+- `GetValueUsingGlobalPosition` 和 `SetValueUsingGlobalPosition` 不传播内部越界错误；
+- `set_dims_size` 更新理论元素数但不调整 `data_` 实际长度；
+- `set_data` 不检查输入长度，`data(i)` 和裸指针接口也不做边界检查；
+- `FREE` 与 `UNKNOWN` 当前使用相同数值 0；
+- 单维/N 维坐标转换函数不验证维度、分辨率或输出指针。
+
+这些行为会影响 SSC 时空占据栅格的安全性，但本注释任务只冻结真实语义，不修改 API。
