@@ -81,7 +81,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.2c4 `core/common` FrenetPrimitive 双模式五次运动基元。
 - [x] M0.2c5a `core/common` 轨迹线条与通用 Marker 属性工具。
 - [x] M0.2c5b `core/common` Pose、PointCloud 与基础几何 Marker。
-- [ ] M0.2c5c `core/common` Mesh、箭头、线条、文本与车辆 Marker。
+- [x] M0.2c5c `core/common` Mesh、箭头、线条、文本与车辆 Marker。
 - [ ] M0.2c5d `core/common` 障碍物、SemanticBehavior 与 GridMap 可视化。
 - [ ] M0.3 语义地图、前向仿真、预测和行为规划。
 - [ ] M0.4 SSC、车辆模型、物理仿真、playground 与配置。
@@ -458,3 +458,20 @@ NaN/Inf 均不检查；头文件使用 rclcpp::Time/Duration 但依赖间接包�
 兼容，可能死循环。Sphere 和两个 Cylinder 接口未设置单位 orientation，ROS 默认全零
 四元数无效；半径、尺度、AABB 长度和上下界顺序均不验证，默认构造的几何数组还可能
 未初始化。Pose 反解不验证四元数归一化；frame 与时间源硬编码，输出指针不检查。
+
+## 27. M0.2c5c：Mesh、箭头、线条、文本与车辆 Marker
+
+- OBB 车辆网格、交通锥和六边形标志使用 `package://common/materials/...` 固定资源，
+  并以固定尺度/模型轴校正姿态显示；
+- 箭头支持“两个几何点”与“Pose+长度”两种 ROS 表达；二维/三维路径、Point 列表可
+  追加为单色或 Jet 渐变 LINE_STRIP，文本使用 TEXT_VIEW_FACING；
+- 单车可视化一次构造 OBB/网格、速度箭头、ID+速度文本以及三种转向辅助图元；当前
+  只发布前三类，且约定 vehicle.id()==0 显示网格、其他车辆显示 OBB。
+
+已确认的后续修复/验证点：资源、frame、尺寸和模型类型均硬编码，BMW 网格不按实际
+VehicleParam 缩放，启用嵌入材质时调用方颜色的效果依赖 RViz。几何点箭头不设置
+scale/color/id 并保留旧 points；Pose 箭头把负长度显示为前向 0.15 m。线条只使用
+scale.x，文本/部分线条仍可能带默认全零 orientation，所有容器继续采用追加语义。
+车辆函数每周期计算两条 10 m 转向圆弧和一条横轴后却不发布，形成纯开销；ego=id0
+约定、固定 id 偏移和 `cmap.at("black")` 都依赖上层隐式条件。M1 可删除死计算、统一
+Marker 初始化和资源/样式配置，但不应混入规划算法对照提交。

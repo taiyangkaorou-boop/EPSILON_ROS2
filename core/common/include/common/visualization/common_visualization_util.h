@@ -629,12 +629,8 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Get the Ros Marker Mesh Using Oriented Bounding Box 2 D object
-   *
-   * @param obb
-   * @param color
-   * @param p_marker
-   * @return ErrorType
+   * @brief 在 OBB 中心/航向处放置固定 BMW X5 网格资源。
+   * @note 网格尺度固定为 1，不随 OBB length/width 缩放；使用嵌入材质并额外旋转模型轴。
    */
   static ErrorType GetRosMarkerMeshUsingOrientedBoundingBox2D(
       const OrientedBoundingBox2D& obb, const ColorARGB& color,
@@ -647,15 +643,8 @@ class VisualizationUtil {
     FillColorInMarker(color, p_marker);
     geometry_msgs::msg::Pose obb_pose;
     GetRosPoseFrom3DofState(Vec3f(obb.x, obb.y, obb.angle), &obb_pose);
-    // obb_pose.position.z = -0.4;
     p_marker->pose = obb_pose;
-    // tf2::Quaternion q(0.0, -0.7071, -0.7071, 0.0);
-    // quaternionTFToMsg(
-    //     tf2::Quaternion(obb_pose.orientation.x, obb_pose.orientation.y,
-    //                    obb_pose.orientation.z, obb_pose.orientation.w) *
-    //         q,
-    //     p_marker->pose.orientation);
-
+    // 固定四元数把 DAE 模型自身坐标轴对齐到车辆平面姿态。
     tf2::Quaternion q(0.0, -0.7071, -0.7071, 0.0);
     tf2::Quaternion obb_orientation(
         obb_pose.orientation.x, obb_pose.orientation.y,
@@ -667,13 +656,8 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Get the Ros Marker Mesh Cone Using Position object
-   *
-   * @param pos
-   * @param color
-   * @param id
-   * @param p_marker
-   * @return ErrorType
+   * @brief 在 map 坐标系指定位置放置固定 traffic_cone.dae 网格。
+   * @note 尺度固定为 2，姿态使用固定模型轴校正四元数。
    */
   static ErrorType GetRosMarkerMeshConeUsingPosition(
       const Vec3f& pos, const ColorARGB& color, const int& id,
@@ -684,27 +668,20 @@ class VisualizationUtil {
     p_marker->type = visualization_msgs::msg::Marker::MESH_RESOURCE;
     p_marker->action = visualization_msgs::msg::Marker::MODIFY;
     p_marker->mesh_resource = "package://common/materials/traffic_cone.dae";
-    // p_marker->mesh_use_embedded_materials = true;
+    // 不启用嵌入材质，使用调用方颜色。
     FillScaleInMarker(Vec3f(2, 2, 2), p_marker);
     FillColorInMarker(color, p_marker);
     p_marker->pose.position.x = pos(0);
     p_marker->pose.position.y = pos(1);
     p_marker->pose.position.z = pos(2);
     tf2::Quaternion q(0.0, -0.7071, -0.7071, 0.0);
-    // quaternionTFToMsg(q, p_marker->pose.orientation);
     tf2::convert(q, p_marker->pose.orientation);
     return kSuccess;
   }
 
   /**
-   * @brief Get the Ros Marker Mesh Hexagon Sign Using Position object
-   *
-   * @param state
-   * @param z_offset
-   * @param color
-   * @param id
-   * @param p_marker
-   * @return ErrorType
+   * @brief 由 `[x,y,yaw]` 和高度偏移构造固定 hexagon_sign.dae 网格 Marker。
+   * @note 尺度固定为 0.5，使用调用方颜色和 map 当前时间。
    */
   static ErrorType GetRosMarkerMeshHexagonSignUsingPosition(
       const Vec3f& state, const decimal_t& z_offset, const ColorARGB& color,
@@ -715,18 +692,20 @@ class VisualizationUtil {
     p_marker->type = visualization_msgs::msg::Marker::MESH_RESOURCE;
     p_marker->action = visualization_msgs::msg::Marker::MODIFY;
     p_marker->mesh_resource = "package://common/materials/hexagon_sign.dae";
-    // p_marker->mesh_use_embedded_materials = true;
+    // 不启用嵌入材质。
     FillScaleInMarker(Vec3f(0.5, 0.5, 0.5), p_marker);
     FillColorInMarker(color, p_marker);
     geometry_msgs::msg::Pose pose;
     GetRosPoseFrom3DofState(state, &pose);
     pose.position.z = z_offset;
     p_marker->pose = pose;
-    // tf2::Quaternion q(0.0, -0.7071, -0.7071, 0.0);
-    // quaternionTFToMsg(q, p_marker->pose.orientation);
     return kSuccess;
   }
 
+  /**
+   * @brief 用起点和向量终点向 ARROW Marker 追加两个几何点。
+   * @note 不设置 id/header/颜色/尺度，也不清空已有 points。
+   */
   static ErrorType GetRosMarkerArrowUsingOriginAndVector(
       const Vec3f& origin, const Vec3f& vec, visualization_msgs::msg::Marker* p_mk) {
     p_mk->type = visualization_msgs::msg::Marker::ARROW;
@@ -747,13 +726,8 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Get the Ros Marker Arrow Using Pose And Norm object
-   *
-   * @param pose
-   * @param norm
-   * @param color
-   * @param p_marker
-   * @return ErrorType
+   * @brief 使用 Pose 的局部 x 轴和给定长度构造姿态式 ARROW Marker。
+   * @note 长度下限为 0.15；负 norm 也会显示为正向 0.15，而不是反向箭头。
    */
   static ErrorType GetRosMarkerArrowUsingPoseAndNorm(
       const geometry_msgs::msg::Pose& pose, const double& norm,
@@ -761,7 +735,8 @@ class VisualizationUtil {
     p_marker->type = visualization_msgs::msg::Marker::ARROW;
     p_marker->action = visualization_msgs::msg::Marker::MODIFY;
     p_marker->pose = pose;
-    p_marker->scale.x = std::max(0.15, norm);  // 0.0 will cause rviz warning
+    // RViz 不接受零长度，因此设置固定最小长度。
+    p_marker->scale.x = std::max(0.15, norm);
     p_marker->scale.y = 0.15;
     p_marker->scale.z = 0.15;
     FillColorInMarker(color, p_marker);
@@ -769,14 +744,8 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Get the Ros Marker Line Strip Using 2 Dof Vec object
-   *
-   * @param path
-   * @param color
-   * @param scale
-   * @param id
-   * @param p_marker
-   * @return ErrorType
+   * @brief 把二维点序列按 z=0 追加为单色 LINE_STRIP。
+   * @note 只使用 scale.x 作为线宽，scale.y/z 被忽略。
    */
   static ErrorType GetRosMarkerLineStripUsing2DofVec(
       const vec_E<Vec2f>& path, const ColorARGB& color, const Vec3f& scale,
@@ -797,15 +766,7 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Get the Ros Marker Line Strip Using 2 Dof Vec With Offset Z object
-   *
-   * @param path
-   * @param color
-   * @param scale
-   * @param z
-   * @param id
-   * @param p_marker
-   * @return ErrorType
+   * @brief 把二维点序列放置在固定 z 高度并追加为单色 LINE_STRIP。
    */
   static ErrorType GetRosMarkerLineStripUsing2DofVecWithOffsetZ(
       const vec_E<Vec2f>& path, const ColorARGB& color, const Vec3f& scale,
@@ -826,15 +787,7 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Get the Ros Marker Line Strip Using 3 Dof State Vec object
-   *
-   * @param path
-   * @param z_offset
-   * @param color
-   * @param scale
-   * @param id
-   * @param p_marker
-   * @return ErrorType
+   * @brief 从三维状态序列读取 x/y、忽略第三分量，并使用统一 z_offset 构造线条。
    */
   static ErrorType GetRosMarkerLineStripUsing3DofStateVec(
       const std::vector<Vec3f>& path, const decimal_t z_offset,
@@ -856,15 +809,8 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Get the Ros Marker Text Using Position And String object
-   *
-   * @param pos
-   * @param str
-   * @param color
-   * @param scale
-   * @param id
-   * @param p_marker
-   * @return ErrorType
+   * @brief 在三维位置放置面向相机的文本 Marker。
+   * @note 不设置 header/namespace，orientation 保持消息默认值。
    */
   static ErrorType GetRosMarkerTextUsingPositionAndString(
       const Vec3f& pos, const std::string& str, const ColorARGB& color,
@@ -882,15 +828,8 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Get the Ros Marker Line Strip Gradient Color Using 3 Dof State Vec
-   * object
-   *
-   * @param path
-   * @param scale
-   * @param offset_z
-   * @param id
-   * @param p_marker
-   * @return ErrorType
+   * @brief 构造固定高度的 LINE_STRIP，并按点顺序追加 Jet 渐变 colors。
+   * @note 调用 `FillGradientColorInMarker(false,...)`，但该参数当前被忽略。
    */
   static ErrorType GetRosMarkerLineStripGradientColorUsing3DofStateVec(
       const std::vector<Vec3f>& path, const Vec3f& scale,
@@ -912,14 +851,8 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Get the Ros Marker Line Strip Using Points object
-   *
-   * @param points
-   * @param scale
-   * @param color
-   * @param id
-   * @param p_marker
-   * @return ErrorType
+   * @brief 把 common::Point 数组复制并追加为带完整三维坐标的 LINE_STRIP。
+   * @note points 参数按值传递，会复制整个输入数组。
    */
   static ErrorType GetRosMarkerLineStripUsingPoints(
       const std::vector<Point> points, const Vec3f& scale,
@@ -940,41 +873,35 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Get the Ros Marker Array Using Vehicle object
-   *
-   * @param vehicle
-   * @param color_obb
-   * @param color_vel_vec
-   * @param color_steer
-   * @param id
-   * @param p_marker_array
-   * @return ErrorType
+   * @brief 为单车构造车身/网格、速度箭头和速度文本，并追加到 MarkerArray。
+   * @param id 当前 Marker 的基础 id；内部预留 id 到 id+6。
+   * @note 车辆 id==0 时显示网格，其他车辆显示 OBB；转向辅助 Marker 被计算但不发布。
    */
   static ErrorType GetRosMarkerArrayUsingVehicle(
       const Vehicle& vehicle, const ColorARGB& color_obb,
       const ColorARGB& color_vel_vec, const ColorARGB& color_steer,
       const int& id, visualization_msgs::msg::MarkerArray* p_marker_array) {
+    // 本次构造的所有 Marker 共用一个 ROS 时间戳。
     rclcpp::Time ros_time = rclcpp::Clock(RCL_ROS_TIME).now();
-    // OBB
+
+    // 车身 OBB 以固定 1.7 m 高度挤出，中心抬到 z=0.75。
     visualization_msgs::msg::Marker obb_marker;
     obb_marker.header.frame_id = "map";
     obb_marker.header.stamp = ros_time;
     obb_marker.id = id;
-    // obb_marker.ns = std::string("obb");
     OrientedBoundingBox2D obb = vehicle.RetOrientedBoundingBox();
     GetRosMarkerCubeUsingOrientedBoundingBox2D(obb, color_obb, 1.7,
                                                &obb_marker);
     obb_marker.pose.position.z = 0.75;
 
-    // Vehicle model
+    // 车辆网格使用固定 BMW X5 资源，不按 VehicleParam 尺寸缩放。
     visualization_msgs::msg::Marker mesh_marker;
     mesh_marker.header.frame_id = "map";
     mesh_marker.header.stamp = ros_time;
     mesh_marker.id = id + 1;
-    // mesh_marker.ns = std::string("model");
     GetRosMarkerMeshUsingOrientedBoundingBox2D(obb, color_obb, &mesh_marker);
 
-    // Velocity vector
+    // 速度箭头沿车辆 yaw 的局部 x 轴，负速度会被最小正长度规则显示为前向短箭头。
     visualization_msgs::msg::Marker vel_vec_marker;
     vel_vec_marker.header.frame_id = "map";
     vel_vec_marker.header.stamp = ros_time;
@@ -986,7 +913,7 @@ class VisualizationUtil {
     GetRosMarkerArrowUsingPoseAndNorm(pose, vehicle.state().velocity,
                                       color_vel_vec, &vel_vec_marker);
 
-    // Velocity text
+    // 文本显示 `车辆ID_速度 m/s`，通过复用 Vec3f 第三分量指定 z=3 m。
     visualization_msgs::msg::Marker vel_text_marker;
     vel_text_marker.header.frame_id = "map";
     vel_text_marker.header.stamp = ros_time;
@@ -994,20 +921,14 @@ class VisualizationUtil {
     pos(2) = 3.0;
     std::string str;
     str += std::string(std::to_string(vehicle.id()) + "_");
-    // TODO: (@denny.ding) remove this code!
     decimal_t visualized_vel = vehicle.state().velocity;
-    // if (visualized_vel < 0.1) visualized_vel = 0.0;
     str += std::string(
         GetStringByValueWithPrecision<decimal_t>(visualized_vel, 3) + " m/s\n");
-    // str += std::string("lon_acc: " +
-    // GetStringByValueWithPrecision<decimal_t>(
-    //                                      vehicle.state().acceleration, 3));
-    // vel_text_marker.ns = std::string("txt");
     GetRosMarkerTextUsingPositionAndString(pos, str, cmap.at("black"),
                                            Vec3f(0.75, 0.75, 0.75), id + 3,
                                            &vel_text_marker);
 
-    // Steering angle
+    // 以下三类转向辅助图元会完整计算，但当前 push_back 语句被注释，不会进入输出数组。
     double arc_length = 10;
     visualization_msgs::msg::Marker steering_angle_marker;
     steering_angle_marker.header.frame_id = "map";
@@ -1021,8 +942,8 @@ class VisualizationUtil {
     GetRosMarkerLineStripUsing3DofStateVec(arc_samples, +0.2, color_steer,
                                            Vec3f(0.1, 0, 0), id + 4,
                                            &steering_angle_marker);
-    // steering_angle_marker.ns = std::string("steer_p");
 
+    // 反向延长圆弧通过航向加 pi、曲率取反构造。
     visualization_msgs::msg::Marker steering_angle_marker_reverse;
     steering_angle_marker_reverse.header.frame_id = "map";
     steering_angle_marker_reverse.header.stamp = ros_time;
@@ -1035,8 +956,8 @@ class VisualizationUtil {
     GetRosMarkerLineStripUsing3DofStateVec(arc_samples2, +0.2, color_steer,
                                            Vec3f(0.1, 0, 0), id + 5,
                                            &steering_angle_marker_reverse);
-    // steering_angle_marker_reverse.ns = std::string("steer_n");
 
+    // 横向短线表示车辆局部横轴，但其状态 z 会被下层统一 z_offset 覆盖。
     visualization_msgs::msg::Marker horizontal_marker;
     horizontal_marker.header.frame_id = "map";
     horizontal_marker.header.stamp = ros_time;
@@ -1053,6 +974,7 @@ class VisualizationUtil {
                                            Vec3f(0.1, 0, 0), id + 6,
                                            &horizontal_marker);
 
+    // 约定 id==0 为自车，显示网格；周车使用简单 OBB。
     if (vehicle.id() == 0) {
       p_marker_array->markers.push_back(mesh_marker);
     } else {
@@ -1060,6 +982,7 @@ class VisualizationUtil {
     }
     p_marker_array->markers.push_back(vel_vec_marker);
     p_marker_array->markers.push_back(vel_text_marker);
+    // 转向圆弧和横轴目前不发布，但上述采样开销仍然发生。
     // p_marker_array->markers.push_back(steering_angle_marker);
     // p_marker_array->markers.push_back(steering_angle_marker_reverse);
     // p_marker_array->markers.push_back(horizontal_marker);
