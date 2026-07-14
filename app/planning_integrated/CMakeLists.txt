@@ -99,7 +99,7 @@ target_link_libraries(test_ssc_with_eudm
   ooqpbase blas ma27 gfortran 
 )
 
-# 向依赖该集成包的下游工程声明运行时/构建期依赖。
+# baseline 尝试导出运行/构建依赖；首个可执行 target 名也会被当作依赖包名处理。
 ament_export_dependencies(test_ssc_with_eudm
     rclcpp
     visualization_msgs

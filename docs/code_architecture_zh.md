@@ -106,7 +106,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.3c6e 关键车辆筛选。
 - [x] M0.3c6f 局部/参考 Lane 生成与采样。
 - [x] M0.3c6g 前后车、交通查询与 LaneNet 距离。
-- [ ] M0.4 SSC、车辆模型、物理仿真、playground 与配置。
+- [x] M0.4 SSC、车辆模型、物理仿真、playground 与配置。
 - [x] M0.4a1 车辆模型 PID、IDM/CTX-IDM 速度包装与 Pure Pursuit 控制器。
 - [x] M0.4a2 IDM 与 Context-IDM 连续模型。
 - [x] M0.4a3 VehicleModel 基类与 IdealSteerModel。
@@ -120,11 +120,11 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.4c1 场景基础依赖与 ArenaLoader。
 - [x] M0.4c2 PhySimulation 状态推进与临时障碍物。
 - [x] M0.4c3 ROS2 adapter、visualizer 与仿真节点。
-- [ ] M0.4d playground、集成入口、launch 与构建配置。
+- [x] M0.4d playground、集成入口、launch 与构建配置。
 - [x] M0.4d1 物理仿真 GeoJSON 工具与 ROS1/ROS2 launch。
 - [x] M0.4d2 物理仿真 CMake、package.xml 与 RViz 资源。
 - [x] M0.4d3 playground 场景资源与包元数据。
-- [ ] M0.4d4 planning_integrated 集成入口与剩余构建/launch 审计。
+- [x] M0.4d4 planning_integrated 集成入口与剩余构建/launch 审计。
 - [ ] M0.5 全仓覆盖审计和遗漏补齐。
 
 后续算法任务使用固定 `dev` 分支；每个小任务必须满足：工作树范围清晰、静态检查
@@ -1498,3 +1498,42 @@ CMake 第一条 install 已安装四场景，末尾又重复安装；中间还�
 和泛化 description 不满足发布/论文归档。M1 应引入 JSON Schema/场景 manifest 和统一 linter，
 修正 num/ID 集，验证拓扑互反、几何连续、初始碰撞和 agent-vehicle 对齐，并让 CMake 只安装
 存在目录一次；每个实验场景应记录 schema version、生成命令、源 CRS/origin、hash 和用途标签。
+
+## 65. M0.4d4：MPDM/EUDM + SSC 集成入口与公平对照边界
+
+- 两个入口都创建一个 SemanticMapManager/RosAdapter，地图更新回调把快照推给行为服务器，
+  行为更新回调再把带决策结果的快照推给 SscPlannerServer；行为与 SSC 工作线程均为 20 Hz，
+  main 以 100 Hz spin_some 派发 ROS2 回调；
+- MPDM 入口使用 BehaviorPlannerServer，固定 autonomous level 3 并启用 HMI；EUDM 入口使用
+  EudmPlannerServer 并额外读取 eudm protobuf 配置。两者共享相同 SemanticMapManager 和 SSC
+  运动规划器，是后续算法对照应保持不变的下层边界；
+- ROS2 Python launch 均从 playgrounds/ssc_planner/eudm_planner 包 share 路径解析配置，并重映射
+  静态/动态 ArenaInfo 输入及 `/ctrl/agent_0` 输出；同目录 XML 是 ROS1 风格历史入口；
+- CMake 编译两个 executable，连接对应行为库、ssc、protobuf/glog、OpenMP（MPDM）及
+  OOQP/BLAS/MA27/gfortran 数值后端，安装节点到 `lib/planning_integrated`、launch 到 share；
+- package.xml 声明 ROS2、common、SemanticMapManager、两个行为规划器、SSC、protobuf/glog 和
+  消息依赖；该包不实现算法库或消息接口。
+
+已确认的后续修复/验证点：两个 main 在参数获取失败后只记录错误，仍以空配置路径/默认值
+继续；ego_id、desired_vel 和路径不做范围/存在性/配置 ID 一致性校验。launch 传入
+`use_sim_state`，main 未 declare，SscPlannerServer::Init 中对应 declare 也被注释；在默认不自动
+声明 override 的 ROS2 NodeOptions 下，get_parameter 可能失败或抛 ParameterNotDeclaredException。
+全局 server 指针和两个 detached 后台线程没有 join/stop；队列入队失败不可见。异常 catch 直接
+return -1 而不调用 rclcpp::shutdown。回调固定返回 0，不能传播 backpressure/处理错误；100 Hz
+spin_some 与工作线程状态没有并发契约。
+更关键的是默认 Python launch 不能作为公平算法对照：MPDM 使用 highway_lite、desired_vel=60
+m/s，EUDM 使用 highway_v1.0、desired_vel=20 m/s；legacy XML 虽都为 20 m/s，场景仍不同。
+MPDM 没有显式行为配置路径，且启用 HMI/level 3；EUDM 使用独立 protobuf，除算法外还有配置
+和交互模式差异。论文实验必须由统一 scenario manifest 同时启动两者，锁定 ego/traffic seed、
+期望速度、地图、SSC、车辆模型、预测时域、计算资源和日志 schema，只改变 behavior algorithm。
+CMake 强制 Release/O3、全局 flags/include，并硬编码 Linux dw、OOQP、BLAS、MA27、gfortran；
+`if(OPENMP_FOUND)` 大小写变量可能不匹配 FindOpenMP 的 OpenMP_FOUND，EUDM target 又未显式
+链接 OpenMP。`ament_export_dependencies(test_ssc_with_eudm ...)` 把 executable 名当依赖包，
+而本包是无公共库/头的叶子应用，本不应导出该集合。package.xml 漏掉 OpenMP/数值后端及
+launch_ros、ament_index_python、playgrounds 等运行依赖，保留未用 rclpy 和占位许可证/版本。
+M1 应建立统一 experiment launcher/config matrix、参数声明和启动前 fail-fast 校验，显式管理
+server 线程生命周期与错误传播；构建改为 target-based 条件依赖，并增加 MPDM/EUDM 配置 diff
+门禁、相同场景/速度/seed 回归、undeclared 参数、缺配置、节点关闭及 install-space launch 测试。
+
+至此 M0.4 已完成：车辆模型、SSC、物理仿真、playground 数据和 MPDM/EUDM 集成入口均已逐层
+建立中文职责与静态风险索引。下一阶段 M0.5 将执行全仓覆盖审计，确认遗漏后再进入 M1 修复。
