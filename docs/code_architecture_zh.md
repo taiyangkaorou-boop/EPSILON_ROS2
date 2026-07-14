@@ -63,7 +63,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.2a2 `core/common` 几何类型与碰撞/投影工具。
 - [x] M0.2a3a `semantics` 车辆、行为概率、语义车辆与控制信号。
 - [x] M0.2a3b1 `semantics` GridMapMetaInfo/GridMapND。
-- [ ] M0.2a3b2 `semantics` 车道、障碍物与 KD-tree 适配。
+- [x] M0.2a3b2 `semantics` 车道、障碍物与 KD-tree 适配。
 - [ ] M0.2a3c `semantics` SSC cube/corridor、交通信号与枚举工具。
 - [ ] M0.2a4 `core/common` 状态与车道类型。
 - [ ] M0.2b `core/common` 数学、样条、轨迹与圆弧。
@@ -136,3 +136,15 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - 单维/N 维坐标转换函数不验证维度、分辨率或输出指针。
 
 这些行为会影响 SSC 时空占据栅格的安全性，但本注释任务只冻结真实语义，不修改 API。
+
+## 9. M0.2a3b2：地图车道与静态障碍物语义
+
+- `LaneRaw` 保存配置文件直接给出的纵横向拓扑、换道可用性和离散中心线；
+- `SemanticLane` 保留拓扑属性，并把离散点转换为可投影/插值的 `Lane` 几何对象；
+- `LaneNet` 与 `SemanticLaneSet` 均以 ID 为键，调试打印不保证稳定顺序；
+- `ObstacleSet` 分开存储圆形与多边形静态障碍物，`type` 只是上层解释的整数标签；
+- `PointVecForKdTree` 只向 nanoflann 暴露二维 x/y，不使用点携带的 values，且不提供
+  预计算包围盒。
+
+本层只表示地图语义，不决定障碍物在 SSC 时间维的占据方式。静态障碍时间坐标必须由
+SSC map adapter 明确填充，不能因为障碍物本身没有时间字段就沿用未初始化时间索引。

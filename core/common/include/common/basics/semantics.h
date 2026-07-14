@@ -692,6 +692,12 @@ class GridMapND {
   std::vector<T> data_;
 };
 
+/**
+ * @brief 从场景配置直接解析得到的原始车道记录。
+ *
+ * child/father 描述纵向拓扑，左右车道 ID 与换道可用标记描述横向拓扑，lane_points
+ * 保存离散中心线。该结构不提供几何插值，需转换为 SemanticLane/Lane 后使用。
+ */
 struct LaneRaw {
   int id;
   int dir;
@@ -712,25 +718,32 @@ struct LaneRaw {
   vec_E<Vec2f> lane_points;
 
   /**
-   * @brief Print info
+   * @brief 输出拓扑、换道属性、端点和离散点数量，供地图解析调试。
    */
   void print() const;
 };
 
+/// 以车道 ID 为键的原始车道网络。
 struct LaneNet {
   std::unordered_map<int, LaneRaw> lane_set;
 
   /**
-   * @brief Clear the container
+   * @brief 清空全部原始车道记录。
    */
   inline void clear() { lane_set.clear(); }
 
   /**
-   * @brief Print info
+   * @brief 输出车道数量并逐车道打印详细信息。
    */
   void print() const;
 };
 
+/**
+ * @brief 完成几何拟合后的语义车道。
+ *
+ * 保留 LaneRaw 的拓扑和行为属性，并以 Lane 对象替代离散 lane_points，供投影、
+ * Frenet 转换和规划器查询使用。
+ */
 struct SemanticLane {
   int id;
   int dir;
@@ -749,96 +762,101 @@ struct SemanticLane {
   Lane lane;
 };
 
+/// 以车道 ID 为键的语义车道集合。
 struct SemanticLaneSet {
   std::unordered_map<int, SemanticLane> semantic_lanes;
 
   /**
-   * @brief Return the size of container
+   * @brief 返回语义车道数量。
    *
-   * @return int size
+   * @return int 容器元素数量。
    */
   inline int size() const { return semantic_lanes.size(); }
 
   /**
-   * @brief Clear the container
+   * @brief 清空全部语义车道。
    */
   void clear() { semantic_lanes.clear(); }
 
   /**
-   * @brief Print info
+   * @brief 输出语义车道集合的数量摘要。
    */
   void print() const;
 };
 
+/// 带 ID 和类型码的圆形静态障碍物。
 struct CircleObstacle {
   int id;
   int type = 0;
   Circle circle;
 
   /**
-   * @brief Print info
+   * @brief 输出障碍物 ID 和圆几何信息。
    */
   void print() const;
 };
 
+/// 带 ID 和类型码的多边形静态障碍物。
 struct PolygonObstacle {
   int id;
   int type = 0;
   Polygon polygon;
 
   /**
-   * @brief Print info
+   * @brief 输出障碍物 ID 和多边形几何信息。
    */
   void print() const;
 };
 
+/// 分别按 ID 保存圆形与多边形障碍物的集合。
 struct ObstacleSet {
   std::unordered_map<int, CircleObstacle> obs_circle;
   std::unordered_map<int, PolygonObstacle> obs_polygon;
 
   /**
-   * @brief Return the size of container
+   * @brief 返回两类障碍物数量之和。
    *
-   * @return int size
+   * @return int 圆形和多边形障碍物总数。
    */
   inline int size() const { return obs_circle.size() + obs_polygon.size(); }
 
   /**
-   * @brief Print info
+   * @brief 依次输出全部圆形和多边形障碍物。
    */
   void print() const;
 };
 
 /**
- * @brief Data structure for Nanoflann
+ * @brief 为 nanoflann 提供二维点云访问协议的数据适配器。
+ *
+ * 每个点可携带整数属性数组；KD-tree 只读取 Point 的 x、y，不访问附加 values。
  */
 struct PointVecForKdTree {
   std::vector<PointWithValue<int>> pts;
 
   /**
-   * @brief Get the container size
+   * @brief 返回 KD-tree 可索引点数量。
    *
-   * @return size_t Output size
+   * @return size_t pts 容器大小。
    */
   inline size_t kdtree_get_point_count() const { return pts.size(); }
 
   /**
-   * @brief Get value of desired dimension of ith point
+   * @brief 返回第 idx 个点在指定维度上的坐标。
    *
-   * @param idx Index of point
-   * @param dim Dimension
-   * @return decimal_t Output value
+   * @param idx 点下标，调用方必须保证不越界。
+   * @param dim 维度；0 返回 x，其他任意值均返回 y。
+   * @return decimal_t 对应二维坐标值。
    */
   inline decimal_t kdtree_get_pt(const size_t idx, const size_t dim) const {
     return dim == 0 ? pts[idx].pt.x : pts[idx].pt.y;
   }
 
   /**
-   * @brief Optional bounding-box computation, not used here
+   * @brief 告知 nanoflann 本适配器不提供预计算包围盒。
    *
-   * @tparam BBOX
-   * @return true
-   * @return false
+   * @tparam BBOX nanoflann 请求的包围盒类型。
+   * @return false 始终要求 nanoflann 自行计算包围盒。
    */
   template <class BBOX>
   bool kdtree_get_bbox(BBOX & /* bb */) const {

@@ -361,6 +361,7 @@ template class GridMapND<int, 2>;
 template class GridMapND<int, 3>;
 
 void LaneRaw::print() const {
+  // 原始车道输出覆盖纵横向拓扑、行为属性和中心线概要。
   printf("Lane %d:\n", id);
   printf(" -- dir:\t%d\n", dir);
 
@@ -389,6 +390,7 @@ void LaneRaw::print() const {
 }
 
 void LaneNet::print() const {
+  // unordered_map 遍历顺序不稳定，本输出只用于人工检查地图内容。
   printf("LaneNet:\n");
   printf(" -- Number of lanes:\t%d\n", static_cast<int>(lane_set.size()));
   for (auto it = lane_set.begin(); it != lane_set.end(); ++it) {
@@ -398,23 +400,27 @@ void LaneNet::print() const {
 }
 
 void SemanticLaneSet::print() const {
+  // 语义 Lane 的几何细节由 Lane 自身接口查询，此处只输出集合规模。
   printf("SemanticLaneSet:\n");
   printf(" -- Number of lanes:\t%d\n", static_cast<int>(semantic_lanes.size()));
 }
 
 void CircleObstacle::print() const {
+  // 类型码未在当前调试输出中展示，仅打印 ID 与圆形几何。
   printf("id: %d\n", id);
   circle.print();
   printf("\n");
 }
 
 void PolygonObstacle::print() const {
+  // 类型码未在当前调试输出中展示，仅打印 ID 与多边形几何。
   printf("id: %d\n", id);
   polygon.print();
   printf("\n");
 }
 
 void ObstacleSet::print() const {
+  // 两种障碍物分别存储，输出时依次遍历圆形和多边形集合。
   for (const auto &obs : obs_circle) {
     obs.second.print();
   }
