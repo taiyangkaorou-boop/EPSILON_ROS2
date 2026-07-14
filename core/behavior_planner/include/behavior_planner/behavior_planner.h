@@ -134,6 +134,11 @@ class BehaviorPlanner : public Planner {
       vec_E<common::Vehicle>* traj,
       std::unordered_map<int, vec_E<common::Vehicle>>* surround_trajs);
 
+  /// 逐一评估有效候选轨迹，并以总代价最小者作为 MPDM winner。
+  ///
+  /// valid_behaviors、valid_forward_trajs 和 valid_surround_trajs 需要按下标一一对应。
+  /// 输出 winner 的横向行为、自车轨迹、总代价和建议速度；候选集合为空时返回
+  /// kWrongStatus，相同代价时保留候选序列中更靠前的行为。
   ErrorType EvaluateMultiPolicyTrajs(
       const std::vector<LateralBehavior>& valid_behaviors,
       const vec_E<vec_E<common::Vehicle>>& valid_forward_trajs,
@@ -143,16 +148,28 @@ class BehaviorPlanner : public Planner {
       vec_E<common::Vehicle>* winner_forward_traj, decimal_t* winner_score,
       decimal_t* desired_vel);
 
+  /// 计算单个候选行为的效率、安全和换道动作代价，并给出轨迹建议速度。
+  ///
+  /// forward_traj 为自车 rollout，surround_traj 按车辆 ID 保存对应周车 rollout。
+  /// 当前代价只使用终端速度/前车、逐时刻车辆碰撞和固定换道惩罚，三项直接相加。
   ErrorType EvaluateSinglePolicyTraj(
       const LateralBehavior& behaivor,
       const vec_E<common::Vehicle>& forward_traj,
       const std::unordered_map<int, vec_E<common::Vehicle>>& surround_traj,
       decimal_t* score, decimal_t* desired_vel);
 
+  /// 对齐比较两条等长车辆轨迹，累计膨胀车身相交时的相对速度软惩罚。
+  ///
+  /// 每个采样点将两车宽度和长度各增加 1 m；发生碰撞时累加
+  /// 0.005*|速度差|。轨迹长度不同返回 kWrongStatus，空的等长轨迹代价为零。
   ErrorType EvaluateSafetyCost(const vec_E<common::Vehicle>& traj_a,
                                const vec_E<common::Vehicle>& traj_b,
                                decimal_t* cost);
 
+  /// 按 baseline 的横向加速度扫描规则从自车轨迹提取建议速度。
+  ///
+  /// 当前实现会在每个非零 |curvature|*velocity^2 采样处覆盖候选速度，因此实际
+  /// 返回最后一个满足条件的状态速度；若全部横向加速度为零，则输出保持为 kInf。
   ErrorType GetDesiredVelocityOfTrajectory(
       const vec_E<common::Vehicle> vehicle_vec, decimal_t* vel);
 

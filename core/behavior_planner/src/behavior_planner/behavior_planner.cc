@@ -370,21 +370,25 @@ ErrorType BehaviorPlanner::EvaluateMultiPolicyTrajs(
     LateralBehavior* winner_behavior,
     vec_E<common::Vehicle>* winner_forward_traj, decimal_t* winner_score,
     decimal_t* desired_vel) {
+  // 三组候选数据依赖相同下标关联；这里只以行为数组长度作为候选数量。
   int num_valid_behaviors = static_cast<int>(valid_behaviors.size());
   if (num_valid_behaviors < 1) return kWrongStatus;
 
+  // winner 初始为未定义和无穷大代价，随后保留第一个严格更小的候选。
   vec_E<common::Vehicle> traj;
   LateralBehavior behavior = common::LateralBehavior::kUndefined;
   decimal_t min_score = kInf;
   decimal_t des_vel = 0.0;
   for (int i = 0; i < num_valid_behaviors; i++) {
     decimal_t score, vel;
+    // 单候选评估同时给出总代价和该自车轨迹对应的建议速度。
     EvaluateSinglePolicyTraj(valid_behaviors[i], valid_forward_trajs[i],
                              valid_surround_trajs[i], &score, &vel);
     // printf("[Stuck]id: %d behavior %d with cost: %lf.\n", ego_id_,
     //        static_cast<int>(valid_behaviors[i]), score);
 
     if (score < min_score) {
+      // 使用严格小于保证同分时保留候选枚举顺序中更靠前的行为。
       min_score = score;
       des_vel = vel;
       behavior = valid_behaviors[i];
@@ -393,6 +397,7 @@ ErrorType BehaviorPlanner::EvaluateMultiPolicyTrajs(
   }
   printf("[MPDM]choose behavior %d with cost %lf.\n",
          static_cast<int>(behavior), min_score);
+  // 将最优候选的四项结果复制到规划主流程的输出缓存。
   *winner_forward_traj = traj;
   *winner_behavior = behavior;
   *winner_score = min_score;
@@ -406,9 +411,11 @@ ErrorType BehaviorPlanner::EvaluateSafetyCost(
   if (traj_a.size() != traj_b.size()) {
     return kWrongStatus;
   }
+  // 两条轨迹按相同时间下标配对，不进行时间戳插值或重采样。
   int num_states = static_cast<int>(traj_a.size());
   decimal_t cost_tmp = 0.0;
   for (int i = 0; i < num_states; i++) {
+    // 宽度、长度各增加 1 m，为几何相交检查加入固定空间裕量。
     common::Vehicle inflated_a, inflated_b;
     common::SemanticsUtils::InflateVehicleBySize(traj_a[i], 1.0, 1.0,
                                                  &inflated_a);
@@ -419,6 +426,7 @@ ErrorType BehaviorPlanner::EvaluateSafetyCost(
                                        inflated_b.param(), inflated_b.state(),
                                        &is_collision);
     if (is_collision) {
+      // 每个碰撞采样仅按两车速度差施加软惩罚，并沿时间维累加。
       cost_tmp +=
           0.01 * fabs(traj_a[i].state().velocity - traj_b[i].state().velocity) *
           0.5;
@@ -432,14 +440,15 @@ ErrorType BehaviorPlanner::EvaluateSinglePolicyTraj(
     const LateralBehavior& behavior, const vec_E<common::Vehicle>& forward_traj,
     const std::unordered_map<int, vec_E<common::Vehicle>>& surround_traj,
     decimal_t* score, decimal_t* desired_vel) {
-  // prepare
+  // 只取每辆周车 rollout 的末状态，构造终端时刻的前车查询集合。
   common::VehicleSet vehicle_set;
   for (auto it = surround_traj.begin(); it != surround_traj.end(); ++it) {
     if (!it->second.empty()) {
       vehicle_set.vehicles.insert(std::make_pair(it->first, it->second.back()));
     }
   }
-  // * efficiency
+
+  // 效率第一项：自车终端速度与当前参考期望速度的绝对误差，经固定尺度 10 归一化。
   common::Vehicle ego_vehicle_terminal = forward_traj.back();
   decimal_t cost_efficiency_ego_to_desired_vel =
       fabs(ego_vehicle_terminal.state().velocity -
@@ -450,6 +459,7 @@ ErrorType BehaviorPlanner::EvaluateSinglePolicyTraj(
   const decimal_t max_backward_len = 10.0;
   decimal_t forward_lane_len =
       std::max(ego_vehicle_terminal.state().velocity * 10.0, 50.0);
+  // 在自车终端状态处重新构造 LK 参考车道，用于搜索终端前车。
   if (map_itf_->GetRefLaneForStateByBehavior(
           ego_vehicle_terminal.state(), p_route_planner_->navi_path(),
           common::LateralBehavior::kLaneKeeping, forward_lane_len,
@@ -461,6 +471,7 @@ ErrorType BehaviorPlanner::EvaluateSinglePolicyTraj(
   decimal_t cost_efficiency_leading_to_desired_vel = 0.0;
   decimal_t distance_residual_ratio = 0.0;
   const decimal_t lat_range = 2.2;
+  // 效率第二项仅在终端找到前车，且自车/前车均低于期望速度并相距 100 m 内时启用。
   if (map_itf_->GetLeadingVehicleOnLane(
           ego_ref_lane, ego_vehicle_terminal.state(), vehicle_set, lat_range,
           &leading_vehicle, &distance_residual_ratio) == kSuccess) {
@@ -473,16 +484,18 @@ ErrorType BehaviorPlanner::EvaluateSinglePolicyTraj(
         leading_vehicle.state().velocity < reference_desired_velocity_ &&
         distance_to_leading_vehicle < 100.0) {
       cost_efficiency_leading_to_desired_vel =
+          // residual ratio 越接近搜索起点越大，再除以至少 2 m 的欧氏距离。
           1.5 * distance_residual_ratio *
           fabs(ego_vehicle_terminal.state().velocity -
                reference_desired_velocity_) /
           std::max(2.0, distance_to_leading_vehicle);
     }
   }
+  // 自车速度误差项和前车阻塞项等权平均。
   decimal_t cost_efficiency = 0.5 * (cost_efficiency_ego_to_desired_vel +
                                      cost_efficiency_leading_to_desired_vel);
 
-  // * safety
+  // 安全项：自车轨迹分别与每辆周车轨迹计算软碰撞代价，然后直接求和。
   decimal_t cost_safety = 0.0;
   for (auto& traj : surround_traj) {
     decimal_t safety_tmp = 0.0;
@@ -490,11 +503,12 @@ ErrorType BehaviorPlanner::EvaluateSinglePolicyTraj(
     cost_safety += safety_tmp;
   }
 
-  // * action
+  // 动作项：所有非 LK 行为都施加相同的固定 0.5 换道惩罚。
   decimal_t cost_action = 0.0;
   if (behavior != common::LateralBehavior::kLaneKeeping) {
     cost_action += 0.5;
   }
+  // 三类代价没有额外可配置权重，直接相加得到候选总分。
   *score = cost_action + cost_safety + cost_efficiency;
   printf(
       "[CostDebug]behaivor %d: (action %lf, safety %lf, efficiency ego %lf, "
@@ -502,6 +516,7 @@ ErrorType BehaviorPlanner::EvaluateSinglePolicyTraj(
       static_cast<int>(behavior), cost_action, cost_safety,
       cost_efficiency_ego_to_desired_vel,
       cost_efficiency_leading_to_desired_vel);
+  // 建议速度独立由整条自车轨迹的曲率/速度扫描结果给出。
   GetDesiredVelocityOfTrajectory(forward_traj, desired_vel);
   return kSuccess;
 }
@@ -512,7 +527,9 @@ ErrorType BehaviorPlanner::GetDesiredVelocityOfTrajectory(
   decimal_t max_acc_normal = 0.0;
   for (auto& v : vehicle_vec) {
     auto state = v.state();
+    // 计算离心加速度幅值 |kappa|*v^2；baseline 中 max_acc_normal 始终保持为 0。
     auto acc_normal = fabs(state.curvature) * pow(state.velocity, 2);
+    // 因阈值未更新，每个正横向加速度采样都会覆盖结果，最终保留最后一次速度。
     min_vel = acc_normal > max_acc_normal ? state.velocity : min_vel;
   }
   *vel = min_vel;
