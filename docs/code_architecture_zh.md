@@ -668,3 +668,28 @@ Frenet 间距，常数和三类代价权重均硬编码。最严重的是建议�
 命令被静默忽略；等级、激进度、仿真参数和裸地图指针均无校验，等级切换也不清理锁定。
 大对象 getter 产生不必要复制。M1 应将候选专属参考 Lane/速度约束前移到 rollout，明确
 Lane 状态机事件和恢复策略，并统一 setter、拓扑查询和数值有效性契约。
+
+## 37. M0.3b3a：BehaviorPlanner ROS2 Server、地图队列与 HMI
+
+- `BehaviorPlannerServer` 持有规划核心、地图适配器和可视化器。构造时创建容量 100 的
+  ReaderWriterQueue；默认工作频率为 20 Hz，也可由调用方传入自定义频率；
+- 上层通过 `PushSemanticMap` 值拷贝输入地图。独立规划线程每周期清空全部积压，只用最后
+  一帧更新 map adapter 和运行 `BehaviorPlanner::RunOnce`，从而优先保证新鲜度而不是逐帧
+  处理；规划成功才把行为写回本地 SMM，但无论成功与否都会执行绑定回调和发布可视化；
+- 结果回调在 detached 规划线程内同步执行，返回值被忽略。可视化使用发布瞬间的 ROS
+  clock；输入地图时间戳、规划耗时对象和全局起始时间戳当前均未参与调度或消息时间；
+- `Init` 在当时等级不低于 L2 时订阅 `/joy`，读取 `use_sim_state` 并初始化可视化器。
+  HMI 还需显式 enable，并用 Joy `frame_id` 过滤 ego；按键 2/1 控制左/右换道，3/0 以
+  1 m/s 调整期望速度，多键优先级依次为左、右、加、减。
+
+已确认的后续修复/验证点：`try_enqueue` 结果被忽略，队列满时静默丢图；整个 SMM 在入队、
+出队和 shared_ptr 快照阶段多次深拷贝。ReaderWriterQueue 的生产者模型、实际调用线程数
+和容量需要在集成层明确。工作频率不校验，零/负值会导致除零或非法周期，高于 1000 Hz
+会截断为 0 ms 忙循环；使用 `system_clock` 还会受系统时间跳变影响。Start 可重复调用并
+创建多个 detached thread，没有 stop/join 或析构同步，server 销毁后线程仍可能访问
+`this`。规划线程、ROS Joy 回调及外部 setter 无锁共享 `bp_`、回调标记和函数对象，存在
+数据竞争。Joy 不检查空消息或 buttons 至少四项，`frame_id` 非数字时 `stoi` 抛异常，
+按键也没有边沿检测/去抖。参数声明被注释，默认 ROS2 参数策略下读取未声明参数可能
+失败；Init/规划/回调返回码大多被忽略，规划失败仍回调旧行为并发布旧轨迹。空回调也可
+被标记为已绑定。M1 应改为有生命周期的 timer/jthread 或 executor callback group，增加
+队列丢帧指标、线程安全配置快照、输入校验和明确的失败输出语义。
