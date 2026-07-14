@@ -69,7 +69,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.2a4b `core/common` Lane 与 LaneGenerator。
 - [x] M0.2b1 `core/common` 数学基础与圆弧运动基元。
 - [x] M0.2b2a `core/common` 多项式、基础样条与边界逆矩阵查找表。
-- [ ] M0.2b2b `core/common` Bezier 曲线与分段 Bezier 样条。
+- [x] M0.2b2b `core/common` Bezier 曲线与分段 Bezier 样条。
 - [ ] M0.2b2c `core/common` SplineGenerator 生成与优化入口。
 - [ ] M0.2b3 `core/common` 轨迹表示与生成。
 - [ ] M0.2c `core/common` 求解器、安全模型、车辆行为模型与可视化。
@@ -237,3 +237,20 @@ SSC map adapter 明确填充，不能因为障碍物本身没有时间字段就�
 也进入同一退化分支。`GetAInverse(0)` 会对奇异矩阵求逆，全局缓存可被外部修改且只按
 浮点精确值命中。`Spline` 不检查断点严格递增，空域检查不足以保护单断点/零分段异常
 对象，域外外推无法从返回码辨别，调试 `print()` 又固定为二维。以上留待 M1 修复。
+
+## 15. M0.2b2b：时间缩放 Bezier 样条
+
+- `BezierSpline<N_DEG,N_DIM>` 以全局断点选择分段，将局部参数归一化到 `[0,1]`，再
+  使用 Bernstein 基函数求值；d 阶导数整体乘以 `duration^(1-d)`；
+- 因零阶位置还乘以一个分段时长，`ctrl_pts_` 实际保存 SSC 优化使用的时间缩放控制
+  变量，不应直接当作常规几何 Bezier 控制点解释；
+- 内部断点精确命中左段；左越界返回错误，右越界的归一化参数被基函数截断到 1，
+  因而返回末点并报告成功；
+- `BezierUtils` 以硬编码解析式提供五次基函数的 0--3 阶导数，以及三阶导数平方积分
+  使用的固定 Hessian，供后续 corridor QP 目标和约束复用。
+
+已确认的后续修复/验证点：`bezier.h` 本身不包含项目数值类型、Eigen、算法/数学和输出
+所需头文件，依赖包含顺序；断点数量、严格递增、零时长、控制变量段数和下标均缺少
+运行时验证。五次基函数收到 0--3 以外导数阶数时直接返回未初始化向量，其他次数和
+不支持的 Hessian 在关闭 assert 后同样可能返回未初始化矩阵。左右越界契约不对称，
+输出指针也未检查。以上在 M1 中通过自包含编译检查和数值单元测试修复。
