@@ -1,18 +1,17 @@
+# float64 行主序占用栅格；data 期望长度为 width*height。
 std_msgs/Header header
 
-# Map width [cells]
+# 地图宽度 [cell]。
 uint32 width
 
-# Map height [cells]
+# 地图高度 [cell]。
 uint32 height
 
-# The map resolution [m/cell]
+# 分辨率 [m/cell]。
 float32 resolution
 
-# The origin of the map [m, m, rad].  This is the real-world pose of the
-# cell (0,0) in the map.
+# cell(0,0) 在世界坐标中的原点位姿。
 geometry_msgs/Pose origin
 
-# The map data, in row-major order, starting with (0,0).  Occupancy
-# probabilities are in the range [0,100].  Unknown is -1.
+# 从 (0,0) 开始按行存储；占用概率 [0,100]，unknown=-1。
 float64[] data

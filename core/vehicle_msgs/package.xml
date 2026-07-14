@@ -9,14 +9,14 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
   <buildtool_depend>rosidl_default_generators</buildtool_depend>
 
+  <!-- 当前声明的几何、导航和 common 依赖。 -->
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
   <depend>common</depend>
-  <!-- 编译依赖 -->
+  <!-- rosidl 生成和运行时依赖。 -->
   <build_depend>rosidl_default_generators</build_depend>
-  <!-- 执行依赖 -->
   <depend>rosidl_default_runtime</depend>
-  <!-- 声明当前所属的功能包组 -->
+  <!-- 声明为 ROS2 interface package。 -->
   <member_of_group>rosidl_interface_packages</member_of_group>
 
   <export>

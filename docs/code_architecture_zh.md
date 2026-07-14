@@ -142,9 +142,9 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.5b ai_agent planner 与 launch/build。
 - [x] M0.5b1 ai_agent MPDM、单步控制与可视化入口。
 - [x] M0.5b2 ai_agent ROS2/legacy launch 与构建元数据。
-- [ ] M0.5c route_planner、vehicle_msgs 与公共 Planner 接口遗漏。
+- [x] M0.5c route_planner、vehicle_msgs 与公共 Planner 接口遗漏。
 - [x] M0.5c1 route_planner 随机导航状态机与构建元数据。
-- [ ] M0.5c2 vehicle_msgs 编解码、消息 schema 与公共 Planner 接口。
+- [x] M0.5c2 vehicle_msgs 编解码、消息 schema 与公共 Planner 接口。
 - [ ] M0.5d 第一方包构建元数据补注释。
 - [ ] M0.5e 全仓函数/文件覆盖复核与 M0 结束标签。
 
@@ -1962,3 +1962,41 @@ M1 应先用可 seed 的 mt19937+uniform_int_distribution、visited/最大深度
 按自车投影真实更新进度；随后实现 Dijkstra/A*/lane-graph route 到指定目标并支持 route cost/规则，
 将随机路由仅用于可复现实验扰动。测试覆盖空/单 Lane、分叉、环、零长度、缺失 child、rd 边界、
 指定目标可达/不可达、真实进度、重复 seed、几何接缝、地图更新和 MPDM 错误传播。
+
+## 79. M0.5c2：vehicle_msgs schema、双向编解码与 Planner 基类
+
+- Encoder/Decoder 是纯头文件静态转换层，覆盖 FreeState/State、VehicleParam/Vehicle/VehicleSet、
+  Lane/LaneNet、Circle/Polygon/ObstacleSet、完整/静态/动态 ArenaInfo 和 ControlSignal；场景复合函数
+  递归调用基础转换，ROS header stamp 转为内部秒时间或由调用方发布时间生成；
+- Vehicle/Lane/Obstacle 集合在 ROS 消息中是数组，内部按 ID map 存储；解码集合先 clear 后 insert；
+  Lane 携带 child/father、左右相邻/可换、行为字符串、长度和中心线；ArenaInfo 可整体传输，也可拆成
+  静态 Lane+Obstacle 和动态 Vehicle 两路；
+- ControlSignal 包含 acc、steer_rate、is_openloop 和期望 State；FreeState 用 Point 承载二维位置/
+  速度/加速度；两类自定义 occupancy grid 采用行主序 data；
+- Planner 基类只规定 Name、Init(string)、RunOnce 和虚析构，具体输入输出/状态由 Route/MPDM/EUDM/
+  SSC 派生类自行暴露；vehicle_msgs CMake 生成除 MotionControl 外的 17 类消息并安装手写编解码头。
+
+已确认的后续修复/验证点：Encoder 的 VehicleSet/LaneNet/ObstacleSet/Polygon/Lane points 都只 append，
+复用输出消息会重复累积；Decoder 集合会 clear，但单 LaneRaw::lane_points 和 Polygon::points 不清空，
+公共基础函数复用对象同样重复。所有函数不检查 nullptr，嵌套转换返回码全部忽略且固定成功；重复
+Vehicle/Lane/Obstacle ID 用 map::insert 静默保留首项，没有诊断。编码 State 使用调用方 publication
+timestamp 覆盖内部 state.time_stamp，round-trip 不保时；GetRosStateMsgFromState 和 FreeState frame
+固定 map，即使父 Vehicle/Arena 传入其他 frame，嵌套 header 也会不一致。Decoder 忽略全部 frame，
+不验证父子 timestamp、有限值、负尺寸/半径、Lane 拓扑引用、width*height=data.size 或数组上限。
+VehicleParam/Lane length 用 float32 而内部多为 double，反复跨 ROS 会有精度损失；Vehicle ID/type/subclass
+和 openloop 使用 std_msgs wrapper 而非标量，Lane behavior 是裸 string。UInt8 grid 文档中的 unknown=-1
+无法由 uint8 表达；两类 grid 虽生成且头文件 include，却没有 encoder/decoder。MotionControl 引用不存在
+的 BicycleKinematicsControl/DoubleIntegratorKinematicsControl，未列入 rosidl_generate，属于失效草案。
+CMake 在 rosidl DEPENDENCIES 写 builtin_interfaces 却未 find；nav_msgs 被 find 但 schema 不使用。
+package.xml 漏 std_msgs、rclcpp、builtin_interfaces，rosidl generators 重复 buildtool/build_depend；公共
+encoder/decoder 直接依赖 rclcpp/common/geometry/generated messages，但 ament export 仅 runtime/include，
+下游 install-space 依赖可能不完整。无 round-trip/property/fuzz/大消息测试。Planner 接口没有 initialized、
+deadline/cancel、输入快照版本、结果对象或详细错误契约，派生类因此形成互不一致的 setter/getter 和
+失败后旧结果语义；Init config 按值复制且格式不透明。M1 应给消息加 schema/version/单位/有界数组和
+统一 frame/time 规则，转换采用 clear-or-construct、StatusOr/非空引用、ID/拓扑/数值 validator，并补
+occupancy codec；删除或完成 MotionControl。测试覆盖每种消息 encode-decode 等价、复用输出、重复 ID、
+坏 frame/time、NaN/极值、float 误差预算、超大场景和 rosidl/install consumer；Planner V2 应显式接收
+不可变输入快照并返回带 epoch/status/diagnostics 的结果。
+
+至此 M0.5c 已完成：RoutePlanner、vehicle_msgs 全部 schema/编解码和 Planner 公共接口均已建立中文
+职责与静态缺陷索引。下一阶段 M0.5d 复核剩余第一方包构建元数据。

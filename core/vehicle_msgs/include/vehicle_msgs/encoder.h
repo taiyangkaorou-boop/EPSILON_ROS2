@@ -1,3 +1,8 @@
+/**
+ * @file encoder.h
+ * @brief common 内部车辆、Lane、障碍物和仿真场景到 ROS2 vehicle_msgs 的头文件编码器。
+ */
+
 #ifndef _VEHICLE_MSGS_INC_VEHICLE_MSGS_ENCODER_H__
 #define _VEHICLE_MSGS_INC_VEHICLE_MSGS_ENCODER_H__
 
@@ -30,8 +35,16 @@
 #include "rclcpp/rclcpp.hpp"
 
 namespace vehicle_msgs {
+
+/**
+ * @brief 以静态函数把内部规划数据按值写入 ROS2 消息。
+ *
+ * 调用方提供时间戳/frame 和输出指针；复合函数递归调用基础编码器。当前函数固定返回成功，
+ * 不检查空指针或数值/拓扑合法性，重复字段也不主动清空。
+ */
 class Encoder {
  public:
+  /// 编码二维自由状态；z 维保持消息默认值，frame 固定为 map。
   static ErrorType GetRosFreeStateMsgFromFreeState(
       const common::FreeState &in_state, const rclcpp::Time &timestamp,
       vehicle_msgs::msg::FreeState *state) {
@@ -47,6 +60,7 @@ class Encoder {
     return kSuccess;
   }
 
+  /// 编码车辆规划状态；内部 time_stamp 被调用方 ROS timestamp 替代。
   static ErrorType GetRosStateMsgFromState(const common::State &in_state,
                                            const rclcpp::Time &timestamp,
                                            vehicle_msgs::msg::State *state) {
@@ -62,6 +76,7 @@ class Encoder {
     return kSuccess;
   }
 
+  /// 编码 VehicleSet header，并按内部 ID map 遍历追加 Vehicle 消息。
   static ErrorType GetRosVehicleSetFromVehicleSet(
       const common::VehicleSet &vehicle_set, const rclcpp::Time &timestamp,
       const std::string &frame_id, vehicle_msgs::msg::VehicleSet *msg) {
@@ -75,6 +90,7 @@ class Encoder {
     return kSuccess;
   }
 
+  /// 编码单车 ID/类别/类型、几何动力学参数和状态。
   static ErrorType GetRosVehicleFromVehicle(const common::Vehicle &vehicle,
                                             const rclcpp::Time &timestamp,
                                             const std::string &frame_id,
@@ -93,6 +109,7 @@ class Encoder {
     return kSuccess;
   }
 
+  /// 编码车辆尺寸、轴距、悬架、转角/加速度限制和后轴到中心距离。
   static ErrorType GetRosVehicleParamFromVehicleParam(
       const common::VehicleParam &vehicle_param,
       vehicle_msgs::msg::VehicleParam *msg) {
@@ -108,6 +125,7 @@ class Encoder {
     return kSuccess;
   }
 
+  /// 编码 LaneNet header，并按 Lane ID map 遍历追加 Lane 消息。
   static ErrorType GetRosLaneNetFromLaneNet(const common::LaneNet &lane_net,
                                             const rclcpp::Time &timestamp,
                                             const std::string &frame_id,
@@ -122,6 +140,7 @@ class Encoder {
     return kSuccess;
   }
 
+  /// 编码 Lane 拓扑、换道可用性、行为字符串、长度和二维中心线点。
   static ErrorType GetRosLaneFromLaneRaw(const common::LaneRaw &lane,
                                          const rclcpp::Time &timestamp,
                                          const std::string &frame_id,
@@ -154,6 +173,7 @@ class Encoder {
     return kSuccess;
   }
 
+  /// 编码圆/多边形障碍物集合并追加到对应数组。
   static ErrorType GetRosObstacleSetFromObstacleSet(
       const common::ObstacleSet &obstacle_set, const rclcpp::Time &timestamp,
       const std::string &frame_id, vehicle_msgs::msg::ObstacleSet *msg) {
@@ -174,6 +194,7 @@ class Encoder {
     return kSuccess;
   }
 
+  /// 编码带 ID/header 的圆形障碍物。
   static ErrorType GetRosCircleObstacleFromCircleObstacle(
       const common::CircleObstacle &circle, const rclcpp::Time &timestamp,
       const std::string &frame_id, vehicle_msgs::msg::CircleObstacle *msg) {
@@ -184,6 +205,7 @@ class Encoder {
     return kSuccess;
   }
 
+  /// 编码带 ID/header 的多边形障碍物。
   static ErrorType GetRosPolygonObstacleFromPolygonObstacle(
       const common::PolygonObstacle &poly, const rclcpp::Time &timestamp,
       const std::string &frame_id, vehicle_msgs::msg::PolygonObstacle *msg) {
@@ -194,6 +216,7 @@ class Encoder {
     return kSuccess;
   }
 
+  /// 编码二维圆心和半径，z 固定为 0。
   static ErrorType GetRosCircleFromCircle(const common::Circle &circle,
                                           vehicle_msgs::msg::Circle *msg) {
     msg->center.x = circle.center.x;
@@ -203,6 +226,7 @@ class Encoder {
     return kSuccess;
   }
 
+  /// 把内部二维多边形点追加为 geometry_msgs/Point32 数组。
   static ErrorType GetRosPolygonFromPolygon(const common::Polygon &poly,
                                             geometry_msgs::msg::Polygon *msg) {
     for (const auto p : poly.points) {
@@ -215,6 +239,7 @@ class Encoder {
     return kSuccess;
   }
 
+  /// 编码包含 LaneNet、ObstacleSet 和 VehicleSet 的完整 ArenaInfo。
   static ErrorType GetRosArenaInfoFromSimulatorData(
       const common::LaneNet &lane_net, const common::VehicleSet &vehicle_set,
       const common::ObstacleSet &obstacle_set, const rclcpp::Time &timestamp,
@@ -229,6 +254,7 @@ class Encoder {
     return kSuccess;
   }
 
+  /// 编码只含 LaneNet/ObstacleSet 的静态场景消息。
   static ErrorType GetRosArenaInfoStaticFromSimulatorData(
       const common::LaneNet &lane_net, const common::ObstacleSet &obstacle_set,
       const rclcpp::Time &timestamp, const std::string &frame_id,
@@ -241,6 +267,7 @@ class Encoder {
     return kSuccess;
   }
 
+  /// 编码只含 VehicleSet 的动态场景消息。
   static ErrorType GetRosArenaInfoDynamicFromSimulatorData(
       const common::VehicleSet &vehicle_set, const rclcpp::Time &timestamp,
       const std::string &frame_id, vehicle_msgs::msg::ArenaInfoDynamic *msg) {
@@ -251,6 +278,7 @@ class Encoder {
     return kSuccess;
   }
 
+  /// 编码加速度、转角速度、开环标志和期望状态控制信号。
   static ErrorType GetRosControlSignalFromControlSignal(
       const common::VehicleControlSignal &ctrl, const rclcpp::Time &timestamp,
       const std::string &frame_id, vehicle_msgs::msg::ControlSignal *msg) {
