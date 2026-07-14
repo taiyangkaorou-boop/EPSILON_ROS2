@@ -99,6 +99,13 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.3c4 ROS adapter。
 - [x] M0.3c5 SemanticMapManager visualizer。
 - [ ] M0.3c6 SemanticMapManager 主类分段审计。
+- [x] M0.3c6a 构造、UpdateSemanticMap、日志与基础访问器。
+- [ ] M0.3c6b 行为/轨迹预测与语义车辆。
+- [ ] M0.3c6c 语义 Lane、本地 Lane 与快速 LUT。
+- [ ] M0.3c6d Lane 距离、碰撞、可达性与最近 Lane。
+- [ ] M0.3c6e 关键车辆筛选。
+- [ ] M0.3c6f 局部/参考 Lane 生成与采样。
+- [ ] M0.3c6g 前后车、交通查询与 LaneNet 距离。
 - [ ] M0.4 SSC、车辆模型、物理仿真、playground 与配置。
 - [ ] M0.5 全仓覆盖审计和遗漏补齐。
 
@@ -843,3 +850,26 @@ Init 既在构造中调用又保持 public，重复调用会重复创建订阅�
 最小速度/有效时间，offset 恒零。Marker 工具返回码、publisher 状态和颜色键异常均未处理，
 marker_lifetime_ 未使用。M1 应先修复时间/静态状态问题，再做稳定 namespace+语义 ID、
 可配置图层、轨迹抽样和行为/风险分色。
+
+## 44. M0.3c6a：SemanticMapManager 生命周期与更新流水线
+
+- JSON 构造路径保存 ego ID/路径，裸 new ConfigLoader 后解析 AgentConfigInfo，并启动全局
+  计时器；直接参数构造路径设置搜索半径、开环预测、左右轴约定，关闭噪声/日志、开启
+  fast LUT 和 simple-lane 模式，但不创建 loader、设置栅格元信息或启动计时器；
+- `UpdateSemanticMap` 先深拷贝时间、自车、完整/周边 LaneNet、GridMap、障碍坐标和周车，
+  再固定按“语义 Lane → 本地 Lane/LUT → 语义车辆 → 关键车辆 → 可选开环预测 → 可选日志”
+  顺序更新，最后无条件返回成功；
+- SaveMapToLog 每次以 append 打开配置路径，复制周车并 insert ego，然后为每辆车写状态
+  时间戳、ID、x/y、速度、加速度、航向、曲率和转角 CSV 行；无表头且容器顺序不稳定；
+- 绝大多数 getter 返回完整值拷贝；另外暴露可变 obstacle_map 指针和内部 SemanticLaneSet
+  只读指针。setter 都直接覆盖单个字段，不联动刷新派生缓存或验证一致性。
+
+已确认的后续修复/验证点：默认构造不初始化 ego_id_/p_config_loader_，直接参数构造也不
+初始化 loader；JSON 构造 new 的 loader 因空析构永久泄漏。默认复制/赋值会浅拷贝该裸
+指针，使“是否有效/是否拥有”语义更混乱。配置解析返回码被忽略。Update 的所有阶段和
+日志返回码都被忽略，部分失败后仍保留半更新状态并返回成功；时间戳不检查单调/有限性，
+关闭 fast LUT 或开环预测也不清理旧缓存。局部 timer 未使用。日志不检查路径/打开/写入，
+每行 endl 强制 flush，ego ID 已存在时 insert 不覆盖，也不记录车辆类型、尺寸、行为、地图
+时间或实验配置。大量大对象 getter 深拷贝造成规划/可视化额外开销；可变内部指针绕过
+不变量，内部只读指针又缺少并发/生命周期契约。M1 应采用 RAII 和显式 copy/move 语义、
+不可变快照或读视图、事务式阶段错误传播，以及有 schema/版本/帧标识的结构化实验日志。

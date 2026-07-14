@@ -26,6 +26,13 @@
 
 namespace semantic_map_manager {
 
+/**
+ * @brief 单 ego 的语义地图快照、Lane 拓扑、周车语义预测和规划查询服务。
+ *
+ * UpdateSemanticMap 接收 DataRenderer 派生数据，按顺序更新语义 Lane、本地 Lane/LUT、
+ * 语义车辆、关键车辆和可选开环轨迹。类同时向行为/运动规划器提供碰撞、Lane、前后车、
+ * 交通信号和拓扑距离查询；大部分状态以值对象保存在内部。
+ */
 class SemanticMapManager {
  public:
   using ObstacleMapType = uint8_t;
@@ -35,10 +42,17 @@ class SemanticMapManager {
   using LateralBehavior = common::LateralBehavior;
   using SemanticLane = common::SemanticLane;
 
+  /// 默认构造空快照；ego_id_ 和 p_config_loader_ 等成员不会被显式初始化。
   SemanticMapManager() {}
+
+  /// 按 ego ID 和 JSON 路径创建 ConfigLoader、解析 AgentConfigInfo 并启动全局计时器。
   SemanticMapManager(const int &id, const std::string &agent_config_path);
+
+  /// 直接设置搜索半径、开环预测和坐标轴约定，启用快速 LUT/简单 Lane 结构模式。
   SemanticMapManager(const int &id, const decimal_t surrounding_search_radius,
                      bool enable_openloop_prediction, bool use_right_hand_axis);
+
+  /// 当前为空析构；配置构造器动态创建的 ConfigLoader 不会被释放。
   ~SemanticMapManager() {}
 
   ErrorType CheckCollisionUsingGlobalPosition(const Vec2f &p_w,
@@ -63,6 +77,7 @@ class SemanticMapManager {
       const Vec3f &state,
       std::set<std::tuple<decimal_t, decimal_t, decimal_t, int>> *res) const;
 
+  /// 覆盖原始快照并依次重建 Lane、车辆语义、关键车辆、预测和可选日志。
   ErrorType UpdateSemanticMap(
       const double &time_stamp, const common::Vehicle &ego_vehicle,
       const common::LaneNet &whole_lane_net,
@@ -129,6 +144,7 @@ class SemanticMapManager {
       bool *has_following_vehicle, common::Vehicle *following_vehicle,
       common::FrenetState *following_fs) const;
 
+  /// 以追加 CSV 行的形式记录 ego 与全部周车状态；当前不写表头或地图级元数据。
   ErrorType SaveMapToLog();
 
   bool IsLocalLaneContainsLane(const int &local_lane_id,
@@ -142,93 +158,130 @@ class SemanticMapManager {
 
   ErrorType GetEgoNearestLaneId(int *ego_lane_id) const;
 
+  /// 返回最近一次 UpdateSemanticMap 的输入时间戳。
   inline double time_stamp() const { return time_stamp_; }
 
+  /// 返回当前 ego ID。
   inline int ego_id() const { return ego_id_; }
 
+  /// 返回自车值拷贝。
   inline common::Vehicle ego_vehicle() const { return ego_vehicle_; }
 
+  /// 返回局部障碍物 GridMap 值拷贝。
   inline common::GridMapND<ObstacleMapType, 2> obstacle_map() const {
     return obstacle_map_;
   }
+  /// 返回内部 GridMap 的可变裸指针，调用方可直接绕过 setter 修改状态。
   inline common::GridMapND<ObstacleMapType, 2> *obstacle_map_ptr() {
     return &obstacle_map_;
   }
+  /// 返回跨帧障碍物世界坐标集合的值拷贝。
   inline std::set<std::array<decimal_t, 2>> obstacle_grids() const {
     return obstacle_grids_;
   }
+  /// 返回半径筛选周车集合的值拷贝。
   inline common::VehicleSet surrounding_vehicles() const {
     return surrounding_vehicles_;
   }
+  /// 返回关键车辆集合的值拷贝。
   inline common::VehicleSet key_vehicles() const { return key_vehicles_; }
+
+  /// 返回完整 LaneNet 值拷贝。
   inline common::LaneNet whole_lane_net() const { return whole_lane_net_; }
+
+  /// 返回周边 LaneNet 值拷贝。
   inline common::LaneNet surrounding_lane_net() const {
     return surrounding_lane_net_;
   }
+  /// 返回语义 LaneSet 值拷贝。
   inline common::SemanticLaneSet semantic_lane_set() const {
     return semantic_lane_set_;
   }
+  /// 返回内部语义 LaneSet 的只读裸指针，生命周期隶属本对象。
   inline const common::SemanticLaneSet *semantic_lane_set_cptr() const {
     const common::SemanticLaneSet *ptr = &semantic_lane_set_;
     return ptr;
   }
+  /// 返回当前自车 SemanticBehavior 值拷贝。
   inline common::SemanticBehavior ego_behavior() const { return ego_behavior_; }
+
+  /// 返回全部语义周车值拷贝。
   inline common::SemanticVehicleSet semantic_surrounding_vehicles() const {
     return semantic_surrounding_vehicles_;
   }
+  /// 返回关键语义车辆值拷贝。
   inline common::SemanticVehicleSet semantic_key_vehicles() const {
     return semantic_key_vehicles_;
   }
+  /// 返回 agent 配置值拷贝。
   inline AgentConfigInfo agent_config_info() const {
     return agent_config_info_;
   }
+  /// 返回关键车辆 ID 列表值拷贝。
   inline std::vector<int> key_vehicle_ids() const { return key_vehicle_ids_; }
 
+  /// 返回观测噪声模块标记的不确定车辆 ID 值拷贝。
   inline std::vector<int> uncertain_vehicle_ids() const {
     return uncertain_vehicle_ids_;
   }
 
+  /// 返回按车辆 ID 保存的开环状态预测轨迹值拷贝。
   inline std::unordered_map<int, vec_E<common::State>> openloop_pred_trajs()
       const {
     return openloop_pred_trajs_;
   }
 
+  /// 返回 TrafficSignalManager 当前限速列表值拷贝。
   inline vec_E<common::SpeedLimit> RetTrafficInfoSpeedLimit() const {
     return traffic_singal_manager_.speed_limit_list();
   }
 
+  /// 返回 TrafficSignalManager 当前交通灯列表值拷贝。
   inline vec_E<common::TrafficLight> RetTrafficInfoTrafficLight() const {
     return traffic_singal_manager_.traffic_light_list();
   }
 
+  /// 返回本地长 Lane 缓存值拷贝。
   inline std::unordered_map<int, common::Lane> local_lanes() const {
     return local_lanes_;
   }
 
+  /// 直接覆盖 ego ID，不联动刷新其他缓存。
   inline void set_ego_id(const int &in) { ego_id_ = in; }
+
+  /// 深拷贝覆盖局部障碍物 GridMap。
   inline void set_obstacle_map(
       const common::GridMapND<ObstacleMapType, 2> &in) {
     obstacle_map_ = in;
   }
+  /// 深拷贝覆盖跨帧障碍物坐标集合。
   inline void set_obstacle_grids(const std::set<std::array<decimal_t, 2>> &in) {
     obstacle_grids_ = in;
   }
+  /// 覆盖自车值对象。
   inline void set_ego_vehicle(const common::Vehicle &in) { ego_vehicle_ = in; }
+
+  /// 深拷贝覆盖周车集合。
   inline void set_surrounding_vehicles(const common::VehicleSet &in) {
     surrounding_vehicles_ = in;
   }
+  /// 深拷贝覆盖完整 LaneNet。
   inline void set_whole_lane_net(const common::LaneNet &in) {
     whole_lane_net_ = in;
   }
+  /// 深拷贝覆盖周边 LaneNet。
   inline void set_surrounding_lane_net(const common::LaneNet &in) {
     surrounding_lane_net_ = in;
   }
+  /// 深拷贝覆盖语义 LaneSet，不联动本地 Lane/LUT。
   inline void set_semantic_lane_set(const common::SemanticLaneSet &in) {
     semantic_lane_set_ = in;
   }
+  /// 覆盖行为规划器回写的自车 SemanticBehavior。
   inline void set_ego_behavior(const common::SemanticBehavior &in) {
     ego_behavior_ = in;
   }
+  /// 覆盖观测噪声模块提供的不确定车辆 ID 列表。
   inline void set_uncertain_vehicle_ids(
       const std::vector<int> &uncertain_vehicle_ids) {
     uncertain_vehicle_ids_ = uncertain_vehicle_ids;
@@ -276,59 +329,66 @@ class SemanticMapManager {
                                    const bool &is_high_quality,
                                    common::Lane *lane) const;
 
+  // 最近地图时间戳，以及固定开环预测时域/步长。
   double time_stamp_{0.0};
 
   decimal_t pred_time_ = 5.0;
   decimal_t pred_step_ = 0.2;
 
+  // 最近 Lane 搜索和一般 Lane 查询的横向范围参数。
   decimal_t nearest_lane_range_ = 1.5;
   decimal_t lane_range_ = 10.0;
 
+  // 状态到 Lane 的最大允许横向距离。
   decimal_t max_distance_to_lane_ = 2.0;
 
+  // 本地长 Lane 缓存及 segment/local 双向查表。
   bool has_fast_lut_ = false;
   std::unordered_map<int, common::Lane> local_lanes_;
   std::unordered_map<int, std::vector<int>> local_to_segment_lut_;
   std::unordered_map<int, std::set<int>> segment_to_local_lut_;
 
+  // 本地 Lane 前后向目标拼接长度。
   decimal_t local_lane_length_forward_ = 250.0;
   decimal_t local_lane_length_backward_ = 150.0;
 
+  // ego 身份、配置来源/内容及左右轴语义约定。
   int ego_id_;
   std::string agent_config_path_;
   AgentConfigInfo agent_config_info_;
   bool use_right_hand_axis_ = true;
 
+  // 当前原始自车、局部栅格和跨帧障碍坐标。
   common::Vehicle ego_vehicle_;
   GridMap2D obstacle_map_;
   std::set<std::array<decimal_t, 2>> obstacle_grids_;
-  // * surrounding vehicles is constructed by radius
+  // 半径构造的周车及其语义版本。
   common::VehicleSet surrounding_vehicles_;
-  // * semantic version of surrounding vehicles
   common::SemanticVehicleSet semantic_surrounding_vehicles_;
-  // * key vehicles on lane based on selection strategy
-  // * key vehicles is a subset of surrounding vehicle
+  // 规划相关关键车辆是 surrounding_vehicles_ 的子集，并另存语义对象和 ID。
   common::VehicleSet key_vehicles_;
-  // * key vehicles with semantics
   common::SemanticVehicleSet semantic_key_vehicles_;
   std::vector<int> key_vehicle_ids_;
   std::vector<int> uncertain_vehicle_ids_;
 
+  // 完整/周边 LaneNet、语义 LaneSet 和行为规划器回写行为。
   common::LaneNet whole_lane_net_;
   common::LaneNet surrounding_lane_net_;
   common::SemanticLaneSet semantic_lane_set_;
   common::SemanticBehavior ego_behavior_;
 
-  // * open loop prediction only for collision checking for onlane mp
+  // 周车开环轨迹，主要供 on-lane motion planning 碰撞检查使用。
   std::unordered_map<int, vec_E<common::State>> openloop_pred_trajs_;
 
+  // 全局计时器、交通信号管理器和配置加载器裸指针。
   TicToc global_timer_;
   TrafficSignalManager traffic_singal_manager_;
   ConfigLoader *p_config_loader_;
 
+  // 关键车辆筛选等逻辑使用的 RSS 检查器。
   common::RssChecker rss_checker_;
 
-  // * For highway-like lane structure only
+  // 简单 Lane 结构模式只面向 highway-like 拓扑。
   bool is_simple_lane_structure_ = false;
 };
 

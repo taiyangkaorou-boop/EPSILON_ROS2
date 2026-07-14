@@ -5,17 +5,20 @@ namespace semantic_map_manager {
 SemanticMapManager::SemanticMapManager(const int &id,
                                        const std::string &agent_config_path)
     : ego_id_(id), agent_config_path_(agent_config_path) {
+  // 配置构造路径动态创建 loader，并按 ego ID 从指定 JSON 填充 AgentConfigInfo。
   p_config_loader_ = new ConfigLoader();
   p_config_loader_->set_ego_id(ego_id_);
   p_config_loader_->set_agent_config_path(agent_config_path_);
+  // 解析返回码未检查；无匹配 ego 或异常配置可能留下未初始化/部分配置。
   p_config_loader_->ParseAgentConfig(&agent_config_info_);
+  // 记录构造起点，供日志/时间相关逻辑使用。
   global_timer_.tic();
 }
 
 SemanticMapManager::SemanticMapManager(
     const int &id, const decimal_t surrounding_search_radius,
     bool enable_openloop_prediction, bool use_right_hand_axis) {
-  // default constructor
+  // 直接参数路径不创建 ConfigLoader，也不设置栅格元信息或启动 global_timer_。
   ego_id_ = id;
   agent_config_info_.surrounding_search_radius = surrounding_search_radius;
   agent_config_info_.enable_openloop_prediction = enable_openloop_prediction;
@@ -23,6 +26,7 @@ SemanticMapManager::SemanticMapManager(
   agent_config_info_.enable_log = false;
   agent_config_info_.enable_fast_lane_lut = true;
   use_right_hand_axis_ = use_right_hand_axis;
+  // 该构造路径假设 highway-like 简单 Lane 拓扑。
   is_simple_lane_structure_ = true;
 }
 
@@ -34,6 +38,7 @@ ErrorType SemanticMapManager::UpdateSemanticMap(
     const std::set<std::array<decimal_t, 2>> &obstacle_grids,
     const common::VehicleSet &surrounding_vehicles) {
   TicToc timer;
+  // 先逐项深拷贝覆盖本帧原始快照；该更新不是事务式，后续失败不会回滚。
   time_stamp_ = time_stamp;
   set_ego_vehicle(ego_vehicle);
   set_whole_lane_net(whole_lane_net);
@@ -42,25 +47,26 @@ ErrorType SemanticMapManager::UpdateSemanticMap(
   set_obstacle_grids(obstacle_grids);
   set_surrounding_vehicles(surrounding_vehicles);
 
-  // * update lanes and topologies
+  // 第一阶段：由完整/周边 LaneNet 重建语义 Lane 及拓扑。
   UpdateSemanticLaneSet();
 
-  // * update key lanes and its LUT
+  // 第二阶段：按配置重建本地长 Lane 和 segment/local 快速查表。
   if (agent_config_info_.enable_fast_lane_lut) {
     UpdateLocalLanesAndFastLut();
   }
 
-  // * update semantic info for vehicles
+  // 第三阶段：为周车关联 Lane、预测横向行为并构造 SemanticVehicle。
   UpdateSemanticVehicles();
 
-  // * update selected key vehicles
+  // 第四阶段：从周车中筛选规划相关关键车辆及其语义对象。
   UpdateKeyVehicles();
 
-  // * openloop prediction for all semantic vehicles
+  // 第五阶段：可选生成全部语义周车的开环状态轨迹。
   if (agent_config_info_.enable_openloop_prediction) {
     OpenloopTrajectoryPrediction();
   }
 
+  // 最后按配置把 ego 与周车状态追加写入日志。
   if (agent_config_info_.enable_log) {
     SaveMapToLog();
   }
@@ -68,13 +74,16 @@ ErrorType SemanticMapManager::UpdateSemanticMap(
 }
 
 ErrorType SemanticMapManager::SaveMapToLog() {
+  // 每次调用重新以 append 模式打开日志文件；打开失败未检查。
   std::ofstream record_file_stream;
   record_file_stream.open(agent_config_info_.log_file,
                           std::ofstream::out | std::ofstream::app);
   record_file_stream.setf(std::ios_base::fixed);
 
+  // 复制周车集合并用 insert 加入 ego；若已存在同 ID 条目则不会覆盖。
   common::VehicleSet vehicle_set = surrounding_vehicles_;
   vehicle_set.vehicles.insert(std::make_pair(ego_vehicle_.id(), ego_vehicle_));
+  // 每辆车写一行状态时间戳、ID、位置、速度、加速度、航向、曲率和转角。
   for (auto &v : vehicle_set.vehicles) {
     record_file_stream << v.second.state().time_stamp << "," << v.first << ","
                        << v.second.state().vec_position[0] << ","
