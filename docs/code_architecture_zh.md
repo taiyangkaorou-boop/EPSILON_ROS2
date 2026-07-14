@@ -78,7 +78,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.2c2 `core/common` RSS 安全距离、速度区间与车辆检查。
 - [x] M0.2c3a `core/common` IDM、IIDM 与 ACC 纵向模型。
 - [x] M0.2c3b `core/common` MOBIL 换道收益与横向行为概率。
-- [ ] M0.2c4 `core/common` FrenetPrimitive。
+- [x] M0.2c4 `core/common` FrenetPrimitive 双模式五次运动基元。
 - [ ] M0.2c5 `core/common` 可视化工具。
 - [ ] M0.3 语义地图、前向仿真、预测和行为规划。
 - [ ] M0.4 SSC、车辆模型、物理仿真、playground 与配置。
@@ -403,3 +403,21 @@ Inf，IIDM 虽做幅值截断但 NaN 不一定被修复。ACC 的 CAH 分母在�
 检查对应 FrenetState，缺失邻车的默认状态可能误判；近似静止后车被当作不存在。目标
 车道不安全时三个加速度输出不写值；每辆车每周期无条件打印收益。上述问题是后续
 BR-EUDM 用持续 belief 与交互 rollout 替代单帧 MOBIL 启发式的重要 baseline 依据。
+
+## 24. M0.2c4：双模式 Frenet 五次运动基元
+
+- `FrenetPrimitive` 始终用五次多项式表示 `s(t)`；横向可用高速/时间独立模式 `d(t)`，
+  或弧长模式 `d(s-s0)`；
+- `Connect` 从两端 Frenet 二阶状态构造 jerk-optimal 连接。弧长模式的纵向位移小于
+  2 m（包括负位移）时用 100 m 虚拟跨度拟合横向多项式，降低近零参数奇异性；
+- `Propagate` 直接构造恒定纵/横向加速度的二次多项式，并查询终点状态；
+- 状态查询允许时域外多项式外推；批量采样覆盖输出并生成 `[begin+offset,end)` 半开
+  区间；`GetJ` 返回纵向和横向三阶导数平方积分；
+- 多项式 setter 和公开模式字段允许轨迹包装器/优化器直接改内部表示，但不会同步端状态。
+
+已确认的后续修复/验证点：类没有独立有效标记，Connect/Propagate 不验证正时长、有限
+状态或输出指针且固定返回成功；Propagate 忽略终点查询错误。`GetFrenetStateSamples`
+未验证正 step，零/负步长可能除零、超大 reserve 或死循环。弧长模式构造可能使用
+100 m 虚拟跨度，但 jerk 指标和 `lateral_T()` 仍使用实际 delta_s；负 delta_s 会使从
+0 到负上限的“平方积分”得到负值。公开 `is_lateral_independent_` 或单独替换多项式后，
+缓存端状态和导数解释可能不一致；域外外推也没有幅值保护。这些需纳入 primitive 回归。
