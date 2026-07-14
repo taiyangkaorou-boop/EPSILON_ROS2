@@ -60,8 +60,9 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 
 - [x] M0.1 系统入口、launch 和辅助工具。
 - [x] M0.2a1 `core/common` 通用配置、宏、计时、线程池、色图与工具函数。
-- [ ] M0.2a2 `core/common` 语义与几何类型。
-- [ ] M0.2a3 `core/common` 状态与车道类型。
+- [x] M0.2a2 `core/common` 几何类型与碰撞/投影工具。
+- [ ] M0.2a3 `core/common` 领域语义类型。
+- [ ] M0.2a4 `core/common` 状态与车道类型。
 - [ ] M0.2b `core/common` 数学、样条、轨迹与圆弧。
 - [ ] M0.2c `core/common` 求解器、安全模型、车辆行为模型与可视化。
 - [ ] M0.3 语义地图、前向仿真、预测和行为规划。
@@ -83,3 +84,19 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 | `thread_pool.h` | FIFO 异步任务执行与 future 返回；任务队列状态由互斥锁和条件变量保护 |
 | `colormap.*` | 数值/名称到 ARGB 颜色的可视化映射；不参与风险数值计算 |
 | `tool_func.*` | 字符串切分、笛卡尔积、数值格式化和区间采样；调用方负责输入前置条件 |
+
+## 6. M0.2a2：几何对象与碰撞工具
+
+| 组件 | 职责与边界 |
+|---|---|
+| `Point` / `Point2i` | 世界坐标点与整数栅格/像素点；不隐式执行坐标系转换 |
+| `OrientedBoundingBox2D` | 使用中心、航向、宽度和长度描述车辆等有向矩形 |
+| `AxisAlignedBoundingBoxND` | 使用中心和各维长度描述 N 维 AABB |
+| `AxisAlignedCubeNd` | 使用各维上下界描述 N 维超立方体，是 SSC cube 的基础容器 |
+| `Circle` / `PolyLine` / `Polygon` | 障碍物和地图几何的轻量数据结构，不自行验证拓扑合法性 |
+| `ShapeUtils` | OBB 分离轴碰撞、AABB 包含/碰撞/表面相交和 OpenCV 点转换；不持有状态 |
+
+当前 OBB 碰撞把零长度投影重叠视为不碰撞；AABB 工具也把仅边界接触视为分离。
+`CheckIfAxisAlignedCubeNdIntersect` 专门检测表面穿越，因此完整包含时返回 false。这些
+判定语义会直接影响后续安全验证，修改时必须通过独立任务和回归场景进行，而不能在
+注释任务中顺带改变。
