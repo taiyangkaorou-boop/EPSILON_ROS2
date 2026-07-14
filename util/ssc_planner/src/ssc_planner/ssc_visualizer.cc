@@ -149,6 +149,7 @@ void SscVisualizer::VisualizeEgoVehicleInSscSpace(
   ego_vehicle_pub_->publish(ego_vehicle_mks);
 }
 
+// 把多车 Frenet 预测轮廓按时间着色并发布到 SSC 空间 MarkerArray。
 void SscVisualizer::VisualizeForwardTrajectoriesInSscSpace(
     const rclcpp::Time &stamp, const vec_E<vec_E<common::FsVehicle>> &trajs,
     const SscMap *p_ssc_map) {

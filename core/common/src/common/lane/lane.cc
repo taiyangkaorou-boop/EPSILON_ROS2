@@ -76,6 +76,7 @@ ErrorType Lane::GetTangentVectorByArcLength(
   return kSuccess;
 }
 
+// 计算指定弧长处的单位左法向；无效弧长或退化导数返回错误。
 ErrorType Lane::GetNormalVectorByArcLength(const decimal_t arc_length,
                                            Vecf<LaneDim>* normal_vector) const {
   if (CheckInputArcLength(arc_length) != kSuccess) {

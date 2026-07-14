@@ -26,6 +26,7 @@ Point2i::Point2i() {}
 
 Point2i::Point2i(int _x, int _y) : x(_x), y(_y) {}
 
+// 输出整数二维点坐标。
 void Point2i::print() const { printf("(%d, %d)", x, y); }
 
 OrientedBoundingBox2D::OrientedBoundingBox2D() {}
@@ -37,6 +38,7 @@ OrientedBoundingBox2D::OrientedBoundingBox2D(const decimal_t x_,
                                              const decimal_t length_)
     : x(x_), y(y_), angle(angle_), width(width_), length(length_) {}
 
+// 输出圆心和半径调试信息。
 void Circle::print() const {
   printf("Circle:\n");
   printf(" -- center:");
@@ -44,12 +46,14 @@ void Circle::print() const {
   printf("\n -- radius: %lf\n", radius);
 }
 
+// 输出折线方向和点数量调试信息。
 void PolyLine::print() const {
   printf("PolyLine:\n");
   printf(" -- dir: %d", dir);
   printf(" -- num of pts: %d", (int)points.size());
 }
 
+// 输出多边形点数量调试信息。
 void Polygon::print() const {
   printf("Polygon:\n");
   printf(" -- num of pts: %d", (int)points.size());

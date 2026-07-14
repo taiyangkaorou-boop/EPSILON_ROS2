@@ -125,7 +125,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.4d2 物理仿真 CMake、package.xml 与 RViz 资源。
 - [x] M0.4d3 playground 场景资源与包元数据。
 - [x] M0.4d4 planning_integrated 集成入口与剩余构建/launch 审计。
-- [ ] M0.5 全仓覆盖审计和遗漏补齐。
+- [x] M0.5 全仓覆盖审计和遗漏补齐。
 - [x] M0.5a EUDM 决策树、地图接口、规划器、管理器、ROS 与配置。
 - [x] M0.5a1 EUDM DCP tree 与公共 Task/LaneChangeInfo 接口。
 - [x] M0.5a2 EUDM 地图接口与 SemanticMapManager 适配器。
@@ -146,7 +146,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.5c1 route_planner 随机导航状态机与构建元数据。
 - [x] M0.5c2 vehicle_msgs 编解码、消息 schema 与公共 Planner 接口。
 - [x] M0.5d 第一方包构建元数据补注释。
-- [ ] M0.5e 全仓函数/文件覆盖复核与 M0 结束标签。
+- [x] M0.5e 全仓函数/文件覆盖复核与 M0 结束标签。
 
 后续算法任务使用固定 `dev` 分支；每个小任务必须满足：工作树范围清晰、静态检查
 通过、提交信息包含模块名、创建 annotated tag、推送提交和标签，并在本索引中更新
@@ -2033,3 +2033,25 @@ maintainer 多为占位，license 多为 TODO，缺少 component/consumer/lint t
 
 至此已补齐全仓第一方业务代码和构建元数据的中文职责注释。M0.5e 将重新扫描文件/函数覆盖、检查
 注释等价提交链和远端标签，确认 M0 阶段结束后再进入 M1 基线可信度修复。
+
+## 81. M0.5e：全仓文件/函数覆盖复核与 M0 收口
+
+- 统一排除 thirdparty、生成物、RViz/图片和 playground 纯资源后，扫描 201 个第一方 C/C++、Python、
+  proto、msg、launch、CMakeLists 和 package.xml；无中文职责文件数为 0；
+- 其中 C/C++ 139 个、约 24699 行。函数声明/定义启发式以签名附近前 6/后 10 行中文注释为覆盖条件，
+  首轮定位 36 项；人工排除 15 个变量构造误报后补齐 21 个真实函数说明；复扫剩余 12 项全部为
+  Vec/Eigen/StateTransformer/容器等局部变量构造误报，真实缺口为 0；
+- 201 个文件全部通过严格 UTF-8 解码，无 U+FFFD；所有小任务提交前均执行 git diff --check，C/C++
+  通过去注释/空白后与上一个 HEAD 等价，proto/textproto/msg/CMake/Python/XML 使用对应注释规则做
+  有效文本等价；因此 M0 注释阶段没有引入算法、参数、消息字段或构建指令变化；
+- Windows 当前未提供 ROS2/Linux 编译环境，遵照任务约束未声称编译通过；所有发现均为静态代码证据，
+  后续在用户 ROS2/Linux 机器通过 colcon、单元、集成、sanitizer 和场景回放验证。
+
+M1 基线可信度修复顺序固定为：1）Config/Init/所有权和未初始化状态；2）server 线程生命周期、Task
+数据竞争、epoch/fail-closed 输出；3）DCP H=1/零负时长、dt-invariant 代价、连续碰撞和错误传播；
+4）RoutePlanner 真实进度/可复现路由；5）vehicle_msgs round-trip/frame/time/集合清理；6）CMake/
+package install-space 依赖闭合。上述修复只恢复可验证基线语义，不混入论文创新；每项建立回归测试和
+独立 tag 后，才进入多模态交互场景树、风险敏感评价和动态 gap/礼让建模等研究模块。
+
+至此 M0“逐文件理解、中文职责注释、静态缺陷审计”完成。后续任何论文创新、baseline 对比和实验
+结论均以本索引、固定 dev 分支和 M0 结束标签为可追溯起点。

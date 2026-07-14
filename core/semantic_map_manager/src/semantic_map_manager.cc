@@ -1414,6 +1414,7 @@ ErrorType SemanticMapManager::GetTargetLaneId(const int lane_id,
   return kSuccess;
 }
 
+// 沿参考 Lane 前向离散采样，在横向半径内搜索最先命中的候选车辆。
 ErrorType SemanticMapManager::GetLeadingVehicleOnLane(
     const common::Lane &ref_lane, const common::State &ref_state,
     const common::VehicleSet &vehicle_set, const decimal_t &lat_range,

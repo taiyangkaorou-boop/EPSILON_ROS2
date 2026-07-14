@@ -940,27 +940,33 @@ void BehaviorPlanner::set_sim_horizon(const decimal_t sim_horizon) {
   sim_horizon_ = sim_horizon;
 }
 
+// 返回用户输入速度上限。
 decimal_t BehaviorPlanner::user_desired_velocity() const {
   return user_desired_velocity_;
 }
 
+// 返回曲率/行为等级处理后的内部参考速度。
 decimal_t BehaviorPlanner::reference_desired_velocity() const {
   return reference_desired_velocity_;
 }
 
+// 按值返回当前胜出语义行为。
 BehaviorPlanner::Behavior BehaviorPlanner::behavior() const {
   return behavior_;
 }
 
+// 按值返回全部有效候选的自车预测轨迹。
 vec_E<vec_E<common::Vehicle>> BehaviorPlanner::forward_trajs() const {
   return forward_trajs_;
 }
 
+// 按值返回与候选轨迹对齐的横向行为数组。
 std::vector<BehaviorPlanner::LateralBehavior>
 BehaviorPlanner::forward_behaviors() const {
   return forward_behaviors_;
 }
 
+// 返回当前自动驾驶等级。
 int BehaviorPlanner::autonomous_level() const { return autonomous_level_; }
 
 }  // namespace planning
