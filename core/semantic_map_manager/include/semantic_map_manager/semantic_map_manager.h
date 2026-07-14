@@ -91,19 +91,22 @@ class SemanticMapManager {
                                        int *id, decimal_t *distance,
                                        decimal_t *arc_len) const;
 
+  /// 用横向偏移/速度固定阈值和相邻 Lane 可用性输出 one-hot LK/LCL/LCR 分布。
   ErrorType NaiveRuleBasedLateralBehaviorPrediction(
       const common::Vehicle &vehicle, const int nearest_lane_id,
       common::ProbDistOfLatBehaviors *lat_probs);
 
+  /// 为 LK/LCL/LCR 构造参考 Lane 及前后车上下文，再调用通用 MOBIL 概率预测器。
   ErrorType MobilRuleBasedBehaviorPrediction(
       const common::Vehicle &vehicle, const common::VehicleSet &nearby_vehicles,
       common::ProbDistOfLatBehaviors *res);
 
+  /// 沿给定 Lane 调用 OnLaneFsPredictor 生成指定时域/步长的车辆状态轨迹。
   ErrorType TrajectoryPredictionForVehicle(const common::Vehicle &vehicle,
                                            const common::Lane &lane,
                                            const decimal_t &t_pred,
-                                           const decimal_t &t_step,
-                                           vec_E<common::State> *traj);
+                                            const decimal_t &t_step,
+                                            vec_E<common::State> *traj);
 
   ErrorType IsTopologicallyReachable(const int lane_id,
                                      const std::vector<int> &path,
@@ -137,6 +140,7 @@ class SemanticMapManager {
                                       const decimal_t &lat_range,
                                       common::Vehicle *leading_vehicle) const;
 
+  /// 查询参考 Lane 上最近前后车，并在存在时输出其 FrenetState 和存在标记。
   ErrorType GetLeadingAndFollowingVehiclesFrenetStateOnLane(
       const common::Lane &ref_lane, const common::State &ref_state,
       const common::VehicleSet &vehicle_set, bool *has_leading_vehicle,
@@ -156,6 +160,7 @@ class SemanticMapManager {
   ErrorType GetTrafficStoppingState(const State &state, const Lane &lane,
                                     State *stopping_state) const;
 
+  /// 使用当前自车状态和空导航路径查询最近 Lane ID。
   ErrorType GetEgoNearestLaneId(int *ego_lane_id) const;
 
   /// 返回最近一次 UpdateSemanticMap 的输入时间戳。
@@ -292,10 +297,12 @@ class SemanticMapManager {
 
   ErrorType UpdateLocalLanesAndFastLut();
 
+  /// 为每辆周车匹配最近 Lane、执行 Naive 行为预测并构造对应参考 Lane。
   ErrorType UpdateSemanticVehicles();
 
   ErrorType UpdateKeyVehicles();
 
+  /// 清空并重建全部语义周车的开环状态预测轨迹。
   ErrorType OpenloopTrajectoryPrediction();
 
   ErrorType GetDistanceOnLaneNet(const int &lane_id_0,

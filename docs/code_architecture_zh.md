@@ -100,7 +100,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.3c5 SemanticMapManager visualizer。
 - [ ] M0.3c6 SemanticMapManager 主类分段审计。
 - [x] M0.3c6a 构造、UpdateSemanticMap、日志与基础访问器。
-- [ ] M0.3c6b 行为/轨迹预测与语义车辆。
+- [x] M0.3c6b 行为/轨迹预测与语义车辆。
 - [ ] M0.3c6c 语义 Lane、本地 Lane 与快速 LUT。
 - [ ] M0.3c6d Lane 距离、碰撞、可达性与最近 Lane。
 - [ ] M0.3c6e 关键车辆筛选。
@@ -873,3 +873,27 @@ marker_lifetime_ 未使用。M1 应先修复时间/静态状态问题，再做�
 时间或实验配置。大量大对象 getter 深拷贝造成规划/可视化额外开销；可变内部指针绕过
 不变量，内部只读指针又缺少并发/生命周期契约。M1 应采用 RAII 和显式 copy/move 语义、
 不可变快照或读视图、事务式阶段错误传播，以及有 schema/版本/帧标识的结构化实验日志。
+
+## 45. M0.3c6b：周车横向行为、语义关联与开环轨迹
+
+- Naive 预测先把车辆投影到最近语义 Lane。右手轴下 `d>0.4 m` 且 `d_dot>0.35 m/s`、
+  左 Lane 存在且可换时输出 one-hot LCL；对称负阈值输出 LCR；非右手轴时交换左右语义，
+  其余情况 one-hot LK；
+- MOBIL 路径为 LK/LCL/LCR 分别构造前后长度等于搜索半径的参考 Lane，查询 2.2 m 横向
+  范围内前后车及 FrenetState，再把三组 Lane/车辆上下文交给 MobilBehaviorPrediction；
+  但 UpdateSemanticVehicles 当前没有调用 MOBIL，只调用 Naive；
+- 每辆周车无导航路径地匹配最近 Lane，执行 Naive 预测并取最大概率行为，再构造前向
+  `max(10*v,50 m)`、后向 10 m 的固定参考 Lane。临时集合完成后 swap 提交；
+- 开环预测启用时每帧清空旧结果，沿每辆语义周车的单一参考 Lane 调用 OnLaneFsPredictor，
+  固定预测 5 s、步长 0.2 s，并按 Vehicle 内部 ID 保存状态序列。
+
+已确认的后续修复/验证点：所有输出指针和数值均无校验；nearest Lane ID 存在但不在
+SemanticLaneSet 时 `.at` 抛异常。Naive 是单帧硬阈值 one-hot，没有历史、转向灯、速度/
+曲率自适应或不确定度；阈值边界直接落 LK，日志会在每个换道预测周期刷屏。MOBIL 准备
+阶段忽略参考 Lane 和前后车查询错误，计算的 has_leading/following 标志没有传给下游，
+可能把默认 Vehicle/FrenetState 当成有效上下文。语义车辆更新忽略最近 Lane、Naive、
+最大概率和参考 Lane 的全部错误，仍固定成功；失败项会以 Invalid/Undefined/空 Lane
+进入集合。插入和预测都使用 Vehicle 内部 ID 而非输入 map key，重复/错误 ID 会静默丢车。
+轨迹包装忽略 predictor 错误并固定成功，预测时域/步长/Lane 有效性不检查；失败仍插入
+空轨迹。预测只跟随单一最大概率模态，无法表达换道多模态占用。M1 应统一预测状态机和
+错误契约，并引入带概率的多模态轨迹、历史平滑/意图特征及可校准不确定度。

@@ -100,11 +100,13 @@ ErrorType SemanticMapManager::SaveMapToLog() {
 ErrorType SemanticMapManager::NaiveRuleBasedLateralBehaviorPrediction(
     const common::Vehicle &vehicle, const int nearest_lane_id,
     common::ProbDistOfLatBehaviors *lat_probs) {
+  // 无有效最近 Lane 时只把输出分布标为无效，不写入新的概率条目。
   if (nearest_lane_id == kInvalidLaneId) {
     lat_probs->is_valid = false;
     return kWrongStatus;
   }
 
+  // 从语义 LaneSet 取得匹配 Lane，并把车辆状态转换为该 Lane 的 Frenet 状态。
   SemanticLane nearest_lane =
       semantic_lane_set_.semantic_lanes.at(nearest_lane_id);
   common::StateTransformer stf(nearest_lane.lane);
@@ -119,8 +121,10 @@ ErrorType SemanticMapManager::NaiveRuleBasedLateralBehaviorPrediction(
   decimal_t prob_lcr = 0.0;
   decimal_t prob_lk = 0.0;
 
+  // 只有横向偏移超过 0.4 m 且同向横向速度超过 0.35 m/s 才判为正在换道。
   const decimal_t lat_distance_threshold = 0.4;
   const decimal_t lat_vel_threshold = 0.35;
+  // 右手轴约定下正 d/dd 映射为 LCL，负 d/dd 映射为 LCR。
   if (use_right_hand_axis_) {
     if (fs.vec_dt[0] > lat_distance_threshold &&
         fs.vec_dt[1] > lat_vel_threshold &&
@@ -146,6 +150,7 @@ ErrorType SemanticMapManager::NaiveRuleBasedLateralBehaviorPrediction(
       prob_lk = 1.0;
     }
   } else {
+    // 非右手轴约定时交换正负横向方向对应的左右换道语义。
     if (fs.vec_dt[0] > lat_distance_threshold &&
         fs.vec_dt[1] > lat_vel_threshold &&
         nearest_lane.r_lane_id != kInvalidLaneId &&
@@ -171,6 +176,7 @@ ErrorType SemanticMapManager::NaiveRuleBasedLateralBehaviorPrediction(
     }
   }
 
+  // 输出严格 one-hot 三分类分布，并显式标记有效。
   lat_probs->SetEntry(common::LateralBehavior::kLaneChangeLeft, prob_lcl);
   lat_probs->SetEntry(common::LateralBehavior::kLaneChangeRight, prob_lcr);
   lat_probs->SetEntry(common::LateralBehavior::kLaneKeeping, prob_lk);
@@ -182,6 +188,7 @@ ErrorType SemanticMapManager::NaiveRuleBasedLateralBehaviorPrediction(
 ErrorType SemanticMapManager::MobilRuleBasedBehaviorPrediction(
     const common::Vehicle &vehicle, const common::VehicleSet &nearby_vehicles,
     common::ProbDistOfLatBehaviors *res) {
+  // 三个候选参考 Lane 的前后覆盖长度都使用周车搜索半径。
   decimal_t lane_radius = agent_config_info_.surrounding_search_radius;
 
   vec_E<common::Lane> lanes;
@@ -194,13 +201,14 @@ ErrorType SemanticMapManager::MobilRuleBasedBehaviorPrediction(
                                          LateralBehavior::kLaneChangeLeft,
                                          LateralBehavior::kLaneChangeRight};
 
+  // 固定按 LK、LCL、LCR 顺序为 MOBIL 准备 Lane 和前后车 Frenet 上下文。
   for (const auto &behavior : behaviors) {
-    // ~ Prepare lane
+    // 构造该行为的局部参考 Lane；返回码被忽略。
     common::Lane ref_lane;
     GetRefLaneForStateByBehavior(vehicle.state(), std::vector<int>(), behavior,
                                  lane_radius, lane_radius, false, &ref_lane);
 
-    // ~ Prepare leading and following vehicle
+    // 在候选 Lane 上搜索前后车并转换 Frenet 状态；存在标记计算后未传给 MOBIL。
     bool has_leading_vehicle = false, has_following_vehicle = false;
     common::Vehicle leading_vehicle, following_vehicle;
     common::FrenetState leading_frenet_state, following_frenet_state;
@@ -209,7 +217,7 @@ ErrorType SemanticMapManager::MobilRuleBasedBehaviorPrediction(
         &leading_vehicle, &leading_frenet_state, &has_following_vehicle,
         &following_vehicle, &following_frenet_state);
 
-    // ~ essemble
+    // 无论查询是否成功，都把默认或查询所得对象按行为顺序压入对应数组。
     lanes.push_back(ref_lane);
     leading_vehicles.push_back(leading_vehicle);
     following_vehicles.push_back(following_vehicle);
@@ -217,6 +225,7 @@ ErrorType SemanticMapManager::MobilRuleBasedBehaviorPrediction(
     follow_frenet_states.push_back(following_frenet_state);
   }
 
+  // 通用 MOBIL 根据三组候选上下文输出横向行为概率。
   if (common::MobilBehaviorPrediction::LateralBehaviorPrediction(
           vehicle, lanes, leading_vehicles, leading_frenet_states,
           following_vehicles, follow_frenet_states, nearby_vehicles,
@@ -232,6 +241,7 @@ ErrorType SemanticMapManager::GetLeadingAndFollowingVehiclesFrenetStateOnLane(
     common::Vehicle *leading_vehicle, common::FrenetState *leading_fs,
     bool *has_following_vehicle, common::Vehicle *following_vehicle,
     common::FrenetState *following_fs) const {
+  // 使用固定 2.2 m 横向搜索半径分别查询最近前车和后车；两次返回码均忽略。
   decimal_t distance_residual_ratio = 0.0;
   const decimal_t lat_range = 2.2;
   GetLeadingVehicleOnLane(ref_lane, ref_state, vehicle_set, lat_range,
@@ -239,11 +249,13 @@ ErrorType SemanticMapManager::GetLeadingAndFollowingVehiclesFrenetStateOnLane(
   GetFollowingVehicleOnLane(ref_lane, ref_state, vehicle_set, lat_range,
                             following_vehicle);
 
+  // 先把存在标记重置为 false；只有输出车辆 ID 有效且 Frenet 转换成功时才置 true。
   common::StateTransformer stf(ref_lane);
   *has_leading_vehicle = false;
   *has_following_vehicle = false;
 
   if (leading_vehicle->id() != kInvalidAgentId) {
+    // 前车存在但无法投影到同一参考 Lane 时，整个上下文查询失败。
     if (stf.GetFrenetStateFromState(leading_vehicle->state(), leading_fs) ==
         kSuccess) {
       *has_leading_vehicle = true;
@@ -252,6 +264,7 @@ ErrorType SemanticMapManager::GetLeadingAndFollowingVehiclesFrenetStateOnLane(
     }
   }
   if (following_vehicle->id() != kInvalidAgentId) {
+    // 后车采用与前车对称的有效 ID 和 Frenet 投影规则。
     if (stf.GetFrenetStateFromState(following_vehicle->state(), following_fs) ==
         kSuccess) {
       *has_following_vehicle = true;
@@ -263,6 +276,7 @@ ErrorType SemanticMapManager::GetLeadingAndFollowingVehiclesFrenetStateOnLane(
 }
 
 ErrorType SemanticMapManager::GetEgoNearestLaneId(int *ego_lane_id) const {
+  // 不提供导航路径约束，只按当前地图和自车 x/y/yaw 查询最近 Lane。
   int nearest_lane_id;
   decimal_t distance, arclen;
   if (GetNearestLaneIdUsingState(ego_vehicle_.state().ToXYTheta(),
@@ -275,12 +289,10 @@ ErrorType SemanticMapManager::GetEgoNearestLaneId(int *ego_lane_id) const {
 }
 
 ErrorType SemanticMapManager::UpdateSemanticVehicles() {
-  // * construct semantic vehicle set
-  // * necessary info: vehicle, nearest_lane_id(w.o. navi_path),
-  // * lat_behavior w.r.t nearest lane
-  // * other info: pred_traj, ref_lane
+  // 在临时集合中完整构造本帧语义周车，最后 swap 替换旧集合。
   common::SemanticVehicleSet semantic_vehicles_tmp;
   for (const auto &v : surrounding_vehicles_.vehicles) {
+    // 复制原始车辆，并在无导航路径约束下匹配最近 Lane、距离和 Lane 上弧长。
     common::SemanticVehicle semantic_vehicle;
     semantic_vehicle.vehicle = v.second;
     GetNearestLaneIdUsingState(
@@ -288,13 +300,16 @@ ErrorType SemanticMapManager::UpdateSemanticVehicles() {
         &semantic_vehicle.nearest_lane_id, &semantic_vehicle.dist_to_lane,
         &semantic_vehicle.arc_len_onlane);
 
+    // 当前更新路径固定采用 Naive one-hot 预测；MOBIL 函数并未在此调用。
     NaiveRuleBasedLateralBehaviorPrediction(
         semantic_vehicle.vehicle, semantic_vehicle.nearest_lane_id,
         &semantic_vehicle.probs_lat_behaviors);
+    // 从有效概率分布取最大概率行为；失败时保留默认 Undefined。
     semantic_vehicle.probs_lat_behaviors.GetMaxProbBehavior(
         &semantic_vehicle.lat_behavior);
 
     decimal_t max_backward_len = 10.0;
+    // 行为参考 Lane 前向至少 50 m，高速时为当前速度的 10 倍，后向固定 10 m。
     decimal_t forward_lane_len =
         std::max(semantic_vehicle.vehicle.state().velocity * 10.0, 50.0);
     GetRefLaneForStateByBehavior(
@@ -302,11 +317,13 @@ ErrorType SemanticMapManager::UpdateSemanticVehicles() {
         semantic_vehicle.lat_behavior, forward_lane_len, max_backward_len,
         false, &semantic_vehicle.lane);
 
+    // 使用 Vehicle 内部 ID 而不是输入容器 key 插入；重复 ID 不会覆盖已有条目。
     semantic_vehicles_tmp.semantic_vehicles.insert(
         std::pair<int, common::SemanticVehicle>(semantic_vehicle.vehicle.id(),
                                                 semantic_vehicle));
   }
   {
+    // 所有车辆处理完成后 swap 提交，避免边遍历边暴露部分新集合。
     semantic_surrounding_vehicles_.semantic_vehicles.swap(
         semantic_vehicles_tmp.semantic_vehicles);
   }
@@ -314,13 +331,16 @@ ErrorType SemanticMapManager::UpdateSemanticVehicles() {
 }
 
 ErrorType SemanticMapManager::OpenloopTrajectoryPrediction() {
+  // 配置启用时每帧清空旧预测，并为全部语义周车按其单一参考 Lane 独立预测。
   openloop_pred_trajs_.clear();
   for (const auto &p_sv : semantic_surrounding_vehicles_.semantic_vehicles) {
+    // 复制 SemanticVehicle 后使用固定 pred_time_=5 s、pred_step_=0.2 s。
     auto semantic_vehicle = p_sv.second;
     vec_E<common::State> traj;
     TrajectoryPredictionForVehicle(semantic_vehicle.vehicle,
                                    semantic_vehicle.lane, pred_time_,
                                    pred_step_, &traj);
+    // 预测失败也会按 Vehicle 内部 ID 插入当前 traj（通常为空）；重复 ID 不覆盖。
     openloop_pred_trajs_.insert({{semantic_vehicle.vehicle.id(), traj}});
   }
   return kSuccess;
@@ -874,6 +894,7 @@ ErrorType SemanticMapManager::TrajectoryPredictionForVehicle(
     const common::Vehicle &vehicle, const common::Lane &lane,
     const decimal_t &t_pred, const decimal_t &t_step,
     vec_E<common::State> *traj) {
+  // 直接转发给 OnLaneFsPredictor；其错误码被忽略，本包装固定返回成功。
   planning::OnLaneFsPredictor::GetPredictedTrajectory(lane, vehicle, t_pred,
                                                       t_step, traj);
   return kSuccess;
