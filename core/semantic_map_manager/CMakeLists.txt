@@ -1,17 +1,17 @@
 cmake_minimum_required(VERSION 3.5)
 project(semantic_map_manager)
 
-# Set C++ standard and build type
+# SMM 使用 C++17、详细 make 输出，并无条件覆盖为 Release/-O3。
 set(CMAKE_VERBOSE_MAKEFILE "true")
 set(CMAKE_BUILD_TYPE "Release")
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_compile_options(-O3 -Wall)
 
-# Set additional CMake modules paths if necessary
+# 预留包内自定义 Find 模块路径。
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
 
-# Find necessary packages using ament and other package managers
+# ROS2/TF/消息、OpenCV/Eigen 和规划内部包依赖。
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(visualization_msgs REQUIRED)
@@ -27,7 +27,7 @@ find_package(motion_predictor REQUIRED)
 find_package(vehicle_msgs REQUIRED)
 find_package(vehicle_model REQUIRED)
 
-# Define include directories
+# SMM 全 target 共用的源码/第三方/依赖 include 路径。
 include_directories(
     include
     ${PROJECT_SOURCE_DIR}/thirdparty
@@ -41,7 +41,7 @@ include_directories(
     ${tf2_geometry_msgs_INCLUDE_DIRS}
 )
 
-# Define the hkust_pl_smm library
+# 地图渲染、配置、交通信号和语义地图核心库。
 add_library(hkust_pl_smm
     src/semantic_map_manager.cc
     src/data_renderer.cc
@@ -58,7 +58,7 @@ ament_target_dependencies(hkust_pl_smm
     OpenCV
 )
 
-# Define the hkust_smm_ros library
+# ROS2 输入适配和可视化封装库。
 add_library(hkust_smm_ros
     src/ros_adapter.cc
     src/visualizer.cc
@@ -82,7 +82,7 @@ target_link_libraries(hkust_smm_ros
     hkust_pl_smm
 )
 
-# Exporting and installation setups
+# 导出两个库、公共依赖和 include 路径。
 ament_export_libraries(hkust_pl_smm hkust_smm_ros)
 
 ament_export_dependencies(
@@ -114,12 +114,12 @@ ament_export_include_directories(
     ${tf2_geometry_msgs_INCLUDE_DIRS}
 )
 
-# Install include directory
+# 安装公共头。
 install(DIRECTORY include/
   DESTINATION include
 )
 
-# Install the libraries
+# 安装两个库并登记 export_hkust_pl_smm export set。
 install(TARGETS hkust_pl_smm hkust_smm_ros
   EXPORT export_hkust_pl_smm
   LIBRARY DESTINATION lib

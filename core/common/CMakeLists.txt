@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.5)
 project(common)
 
-# Enforce C++17 standard
+# 公共算法库使用 C++17，并无条件覆盖为 Release/-O3。
 if(NOT CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 17)
 endif()
@@ -9,10 +9,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_BUILD_TYPE "Release")
 add_compile_options(-O3 -Wall)
 
-# Set additional CMake modules paths if necessary
+# 使用包内 cmake 查找 OOQP 等非标准依赖。
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
 
-# Find necessary packages using ament and other package managers
+# ROS2、TF、数值、日志、图像、protobuf 和 OOQP 依赖。
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(visualization_msgs REQUIRED)
@@ -30,11 +30,11 @@ if(NOT OOQP_FOUND)
     message(FATAL_ERROR "OOQP not found.")
 endif()
 
-# Set directories for third-party and OOQP includes
+# 源码树 thirdparty 和 OOQP 头路径。
 set(THIRD_PARTY_INCLUDE_DIRS ${PROJECT_SOURCE_DIR}/thirdparty ${PROTOBUF_INCLUDE_DIR})
 set(OOQP_INCLUDE_DIRS ${PROJECT_SOURCE_DIR}/thirdparty/OOQP/include)
 
-# Include directories for project and dependencies
+# 旧式全目录 include，向本包所有 target 注入依赖头。
 include_directories(
   include
   ${PROJECT_SOURCE_DIR}/thirdparty
@@ -47,7 +47,7 @@ include_directories(
   ${tf2_geometry_msgs_INCLUDE_DIRS}
 )
 
-# Link directories for third-party libraries
+# OOQP 库目录和公共第三方链接集合。
 link_directories(${OOQP_LIBRARY_DIRS})
 
 set(THIRD_PARTY_LIBRARIES
@@ -58,7 +58,7 @@ set(THIRD_PARTY_LIBRARIES
     ${PROTOBUF_LIBRARIES}
 )
 
-# Define the hkust_pl_ooqp_itf library
+# QP solver/OOQP 适配库。
 add_library(hkust_pl_ooqp_itf 
     src/common/solver/ooqp_interface.cc
     src/common/solver/qp_solver.cc
@@ -71,7 +71,7 @@ target_link_libraries(hkust_pl_ooqp_itf
     ooqpbase blas ma27 gfortran 
 )
 
-# Define the hkust_pl_common library with all common source files
+# common 基础几何、Lane、状态变换、IDM/MOBIL/RSS、样条和 primitive 源文件。
 set(COMMON_SRC
     src/common/basics/colormap.cc
     src/common/basics/semantics.cc
@@ -106,7 +106,7 @@ target_link_libraries(hkust_pl_common
     ${tf2_geometry_msgs_LIBRARIES}
 )
 
-# Exporting and installation setups
+# 导出 common/OOQP 库、公共依赖和 include 路径。
 ament_export_libraries(hkust_pl_common hkust_pl_ooqp_itf)
 
 ament_export_dependencies(
@@ -141,7 +141,7 @@ install(DIRECTORY include/${PROJECT_NAME}/
   PATTERN ".svn" EXCLUDE
 )
 
-# Define export sets for the targets
+# 安装两个库并写入 hkust_pl_export export set。
 install(TARGETS hkust_pl_common hkust_pl_ooqp_itf
   EXPORT hkust_pl_export
   LIBRARY DESTINATION lib
@@ -150,7 +150,7 @@ install(TARGETS hkust_pl_common hkust_pl_ooqp_itf
   INCLUDES DESTINATION include
 )
 
-# Install the export set
+# 安装 CMake export 文件和可视化材料资源。
 install(EXPORT hkust_pl_export
   FILE hkust_pl_export.cmake
   DESTINATION share/${PROJECT_NAME}/cmake

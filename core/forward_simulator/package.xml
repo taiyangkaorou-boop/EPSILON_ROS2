@@ -6,6 +6,7 @@
   <maintainer email="wdingae@todo.com">HKUST_UAV_GROUP</maintainer>
   <license>TODO</license>
 
+  <!-- ament 与当前声明的头文件包依赖。 -->
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <depend>rclcpp</depend>
@@ -13,7 +14,7 @@
   <depend>common</depend>
   <depend>vehicle_model</depend>
 
-  <!-- Export dependencies -->
+  <!-- 声明标准 ament_cmake 构建类型。 -->
   <export>
     <build_type>ament_cmake</build_type>
   </export>

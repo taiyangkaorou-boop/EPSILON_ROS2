@@ -145,7 +145,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.5c route_planner、vehicle_msgs 与公共 Planner 接口遗漏。
 - [x] M0.5c1 route_planner 随机导航状态机与构建元数据。
 - [x] M0.5c2 vehicle_msgs 编解码、消息 schema 与公共 Planner 接口。
-- [ ] M0.5d 第一方包构建元数据补注释。
+- [x] M0.5d 第一方包构建元数据补注释。
 - [ ] M0.5e 全仓函数/文件覆盖复核与 M0 结束标签。
 
 后续算法任务使用固定 `dev` 分支；每个小任务必须满足：工作树范围清晰、静态检查
@@ -2000,3 +2000,36 @@ occupancy codec；删除或完成 MotionControl。测试覆盖每种消息 encod
 
 至此 M0.5c 已完成：RoutePlanner、vehicle_msgs 全部 schema/编解码和 Planner 公共接口均已建立中文
 职责与静态缺陷索引。下一阶段 M0.5d 复核剩余第一方包构建元数据。
+
+## 80. M0.5d：剩余第一方核心包构建与安装边界
+
+- behavior_planner 构建 MPDM 核心/地图适配库 behavior_planner_lib 和 ROS server 库
+  behavior_planner_ros，直接链接 common/route/SMM/vehicle_model 内部 target；
+- common 构建 hkust_pl_ooqp_itf 与 hkust_pl_common，汇集基础几何、Lane/状态、IDM/MOBIL/RSS、
+  primitive/样条和 OOQP solver，并链接 Backward、glog、OpenCV、protobuf、OOQP、TF；
+- forward_simulator 与 motion_predictor 均为安装 include 的 header-only 包，没有自身 library target，
+  却分别导出 vehicle_model_LIBRARIES 和 forward_simulator_LIBRARIES；
+- semantic_map_manager 构建核心 hkust_pl_smm 和 ROS2 hkust_smm_ros，使用 ament_target_dependencies；
+  vehicle_model 构建车辆模型、IDM/CTX-IDM 与 pure-pursuit/PID/速度控制器库；六包均安装公共头。
+
+已确认的后续修复/验证点：六包普遍无条件设置 Release/-O3 和全局 include/compile options，导致 Debug、
+sanitizer 和可复现实验编译选项被覆盖；除 common 外，多数 CMAKE_MODULE_PATH 指向不存在目录。
+behavior_planner 的 package.xml 漏 CMake 直接依赖 vehicle_model、forward_simulator、visualization_msgs、
+sensor_msgs，保留未用 rclpy；target 未使用 ament_target_dependencies/EXPORT targets，只依赖工作区内部
+库名。common 把源码 thirdparty/OOQP 路径作为 ament export include，却只安装 common 手写头，独立
+install consumer 无法获得 moodycamel/Backward/OOQP 头；安装 hkust_pl_export 文件但未调用
+ament_export_targets，tf2_ros 在 export dependencies 重复，package 漏 tf2/OOQP 且保留 rclpy，
+PROTOBUF_INCLUDE_DIR/INCLUDE_DIRS 混用。forward_simulator/motion_predictor 作为 header-only 包不应导出
+其他包库名；两者没有 interface target，前者 CMake 声明 rclcpp/visualization/sensor 但头未直接使用，
+package 还写 ROS1 rospy；后者 package 漏 CMake 的 vehicle_model，保留未用 rclpy。SMM CMake 给 install
+targets 指定 export_hkust_pl_smm，却没有 install(EXPORT)/ament_export_targets；package 漏 tf2、
+vehicle_model、Eigen/OpenCV，保留 rclpy；源码 thirdparty include 是否安装/导出同样不闭合。
+vehicle_model CMake 历史注释称 C++14 但实际 17，package 漏 geometry_msgs/Eigen/Boost 以及 CMake 声明的
+visualization/sensor，保留 rclpy；source thirdparty 路径被导出但安装策略不明确。所有包版本/描述/
+maintainer 多为占位，license 多为 TODO，缺少 component/consumer/lint test。M1 应统一 workspace 编译选项
+为顶层可覆盖，逐 target 使用 PUBLIC/PRIVATE 依赖；header-only 包建立 INTERFACE target；第三方改为
+明确 vendored install 或系统 package；为每包建立 ament export targets 和干净 install-space consumer，
+用 rosdep/package.xml-CMake diff、`colcon test`、Debug/Release/ASan/TSan 和最小依赖构建矩阵验证。
+
+至此已补齐全仓第一方业务代码和构建元数据的中文职责注释。M0.5e 将重新扫描文件/函数覆盖、检查
+注释等价提交链和远端标签，确认 M0 阶段结束后再进入 M1 基线可信度修复。

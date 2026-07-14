@@ -7,6 +7,7 @@
   <maintainer email="wdingae@todo.com">HKUST_UAV_GROUP</maintainer>
   <license>TODO</license>
 
+  <!-- ament 及 common 公共头/库当前声明的直接依赖。 -->
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <depend>rclcpp</depend>
@@ -21,6 +22,7 @@
   <depend>protobuf</depend>
 
 
+  <!-- ament 构建类型，并把 materials 目录注册为包资源。 -->
   <export>
     <build_type>ament_cmake</build_type>
     <material>materials</material>

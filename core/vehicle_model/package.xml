@@ -6,13 +6,13 @@
   <maintainer email="wdingae@todo.com">HKUST_UAV_GROUP</maintainer>
   <license>TODO</license>
 
-  <!-- Build tool and dependencies -->
+  <!-- ament 与当前 package.xml 声明的依赖；CMake 中还有未同步的直接依赖。 -->
   <buildtool_depend>ament_cmake</buildtool_depend>
-  <depend>rclcpp</depend>  <!-- C++ client library for ROS 2 -->
-  <depend>rclpy</depend>   <!-- Python client library for ROS 2 -->
-  <depend>common</depend>  <!-- Assume this is a custom package that needs conversion too -->
+  <depend>rclcpp</depend>
+  <depend>rclpy</depend>
+  <depend>common</depend>
 
-  <!-- Export tags can include additional information needed for other tools -->
+  <!-- 声明标准 ament_cmake 构建类型。 -->
   <export>
     <build_type>ament_cmake</build_type>
   </export>

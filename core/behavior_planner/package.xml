@@ -6,6 +6,7 @@
   <maintainer email="wdingae@todo.com">HKUST_UAV_GROUP</maintainer>
   <license>BSD</license>
 
+  <!-- ament 与当前声明的 MPDM 运行/构建依赖。 -->
   <buildtool_depend>ament_cmake</buildtool_depend>
   <depend>rclcpp</depend>
   <depend>rclpy</depend>
@@ -13,6 +14,7 @@
   <depend>semantic_map_manager</depend>
   <depend>route_planner</depend>
 
+  <!-- 声明标准 ament_cmake 构建类型。 -->
   <export>
     <build_type>ament_cmake</build_type>
   </export>
