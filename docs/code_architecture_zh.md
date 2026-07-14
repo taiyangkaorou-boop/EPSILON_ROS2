@@ -76,7 +76,8 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.2b3 `core/common` 轨迹抽象、Frenet Bezier 与 FrenetPrimitive 包装。
 - [x] M0.2c1 `core/common` 加权最小二乘 QP 与 OOQP/MA27 接口。
 - [x] M0.2c2 `core/common` RSS 安全距离、速度区间与车辆检查。
-- [ ] M0.2c3 `core/common` IDM 与 MOBIL 行为模型。
+- [x] M0.2c3a `core/common` IDM、IIDM 与 ACC 纵向模型。
+- [ ] M0.2c3b `core/common` MOBIL 换道收益与横向行为概率。
 - [ ] M0.2c4 `core/common` FrenetPrimitive。
 - [ ] M0.2c5 `core/common` 可视化工具。
 - [ ] M0.3 语义地图、前向仿真、预测和行为规划。
@@ -363,3 +364,20 @@ release 下短输入会越界，且改系数不更新有效标记或端状态。
 点质量版本忽略车身尺寸，车辆版也只用轴向长度/宽度而非航向 OBB；合法时速度上下界
 统一写零，不能解释为真实可行区间。阈值相等被视为安全，后向重叠没有前向重叠的立即
 处理。后续 BR-EUDM/backup-RSS 必须把这些简化与正式安全层清楚区分。
+
+## 22. M0.2c3a：IDM、IIDM 与 ACC 纵向模型
+
+- `State` 用一维 s/v 表达自车和前车，`Param` 提供期望速度、固定车长、最小间距、
+  期望时距、最大加速、舒适/硬制动幅值和自由流指数；
+- 原始 IDM 由自由流速度项和动态期望间距平方项组成，不截断输出；
+- IIDM 针对超速制动过强与期望速度附近时距失真进行分段修正，最终把加速度限制在
+  `[-hard_brake, max_acc]`；
+- ACC 入口在 IIDM 基础上加入假设前车恒定舒适制动的 CAH，并以固定 0.99 coolness
+  通过 tanh 平滑融合；vehicle_model 和 MOBIL 都复用这些静态公式。
+
+已确认的后续修复/验证点：默认期望速度为零，三个入口均不验证输出指针、参数有限性、
+正期望速度、正加速/制动或指数范围。净间距在零处截断后继续作为分母；IIDM 在
+`v==desired_velocity` 附近还可能出现 `a_free=0` 后的除零指数。原始 IDM 可直接输出
+Inf，IIDM 虽做幅值截断但 NaN 不一定被修复。ACC 的 CAH 分母在前车速度和间距同时为
+零时为零，且其 ds 未扣除 Param 中的固定车长，与 IDM 净间距定义不一致；coolness
+也不可配置。M1 需添加有限性回退、统一净间距和边界工况单元测试。
