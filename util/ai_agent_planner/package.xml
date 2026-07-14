@@ -6,7 +6,7 @@
   <maintainer email="wdingae@todo.com">HKUST_UAV_GROUP</maintainer>
   <license>TODO</license>
 
-  <!-- Build tool and dependencies -->
+  <!-- ament 构建工具与当前声明的运行/编译依赖。 -->
   <buildtool_depend>ament_cmake</buildtool_depend>
   <depend>rclcpp</depend>
   <depend>rclpy</depend>
@@ -17,7 +17,7 @@
   <exec_depend>ros2launch</exec_depend>
 
 
-  <!-- Export tags can include additional information needed for other tools -->
+  <!-- 声明标准 ament_cmake 构建类型。 -->
   <export>
     <build_type>ament_cmake</build_type>
   </export>

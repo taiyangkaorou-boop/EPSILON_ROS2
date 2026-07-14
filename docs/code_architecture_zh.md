@@ -139,9 +139,9 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.5a4b EUDM manager 动作续接、HMI 状态机与重选实现。
 - [x] M0.5a4c EUDM ROS2 server 与 visualizer。
 - [x] M0.5a5 EUDM proto、CMake 与 package 元数据。
-- [ ] M0.5b ai_agent planner 与 launch/build。
+- [x] M0.5b ai_agent planner 与 launch/build。
 - [x] M0.5b1 ai_agent MPDM、单步控制与可视化入口。
-- [ ] M0.5b2 ai_agent ROS2/legacy launch 与构建元数据。
+- [x] M0.5b2 ai_agent ROS2/legacy launch 与构建元数据。
 - [ ] M0.5c route_planner、vehicle_msgs 与公共 Planner 接口遗漏。
 - [ ] M0.5d 第一方包构建元数据补注释。
 - [ ] M0.5e 全仓函数/文件覆盖复核与 M0 结束标签。
@@ -1902,3 +1902,33 @@ M1 应引入带时间戳的观测-计划-控制快照和闭环状态校正，统
 显式 seed、分布和更新周期参数，并提供 deterministic/heterogeneous traffic profile；测试覆盖真实/
 期望状态偏差、地图延迟/乱序/时间回退、空参考 Lane、前车查询失败、队列满、等级越界、固定 seed
 复现、多个 agent 并发和行为线程/控制线程 TSAN。
+
+## 77. M0.5b2：AI agent ROS2/legacy launch 与构建元数据
+
+- ROS2 onlane_ai_agent_launch.py 声明三路 arena topic、统一 desired/autonomous/aggressiveness 和
+  playground，固定循环创建 ego ID 1..10，分别把 ctrl remap 到 `/ctrl/agent_<id>`；默认场景
+  highway_lite、速度 10 m/s、自动等级 3、激进等级 4；
+- onlane_ego_agent_launch.py 只启动 ID 0，默认 highway_v1.0、10 m/s、自动等级 3，未传
+  aggressiveness，使用节点默认 3；两份 Python launch 通过 ament_index 查 playgrounds 资源；
+- 同目录 `.launch` 是 ROS1 XML 遗留版本，多车同样固定 ID 1..10，但 autonomous 默认 2；CMake
+  将整个 launch 目录一并安装；
+- CMake 构建 onlane_ai_agent，ament 声明 ROS2/内部库依赖，同时直接链接 Backward、OOQP、BLAS、
+  MA27、gfortran 和一组旧式变量库；package.xml 仅声明部分核心包和 ros2launch。
+
+已确认的后续修复/验证点：多车数量和 ID 硬编码，未读取 playground agent 配置；已审计场景中存在
+num/实际 agent/vehicle 数不一致和缺失 agent 配置，固定 1..10 会遗漏或创建无效主体。所有 AI agent
+使用相同 desired/autonomous/aggressiveness，源码 RandomBehavior 又未调用，交通流缺少可控异质性；
+单 ego 未暴露 aggressiveness。ROS1/ROS2 launch 默认 autonomous 2/3 不一致，且 ROS1 `$(find)`、
+`type=`、私有 `~topic` 语义不应作为 ROS2 可运行入口，却被同样安装，容易误用。Python launch 缺少
+agent_count/id list/seed/profile/频率参数、场景文件存在性和 ID 合法性校验。package.xml 漏掉源码直接
+使用的 sensor_msgs、vehicle_msgs、vehicle_model、visualization_msgs，以及 launch、launch_ros、
+ament_index_python、playgrounds；rclpy 未使用。CMake 无条件 Release/-O3，cmake 模块目录不存在，
+保留 catkin_INCLUDE_DIRS 和手工 rclcpp/*_LIBRARIES；dw、OOQP、blas、ma27、gfortran 未 find/声明，
+完全依赖工作区全局 target/系统环境，移植和 install-space consumer 不可靠。缺少 lint、launch test、
+参数测试和无 GUI/headless 场景测试。M1 应生成 data-driven agent launch（从场景 JSON 校验 ID/数量），
+统一 ROS2 唯一入口和参数 schema，支持每车 profile+seed；构建改为现代 target 依赖并显式发现数值库，
+package 补齐直接运行依赖；测试覆盖 highway/ring 场景 ID 完整性、不同 profile 分布、固定 seed、
+launch 参数类型/缺资源、1/10/20 agent 启停及 install-space `ros2 launch`。
+
+至此 M0.5b 已完成：AI agent 的地图-行为-控制闭环、随机性缺口、ROS2/ROS1 启动差异和构建依赖均已
+形成中文职责与静态风险索引。下一阶段 M0.5c 转向 route_planner、vehicle_msgs 和公共 Planner 接口。

@@ -1,10 +1,14 @@
+# 启动 ID 1..10 的 MPDM/on-lane 仿真交通参与者。
+
 from launch import LaunchDescription
 from launch_ros.actions import Node
 from launch.actions import DeclareLaunchArgument, LogInfo
 from ament_index_python.packages import get_package_share_directory
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 
+
 def generate_launch_description():
+    # 地图输入 topic、统一驾驶参数和 playground 资源目录。
     arena_info_topic = DeclareLaunchArgument(
         'arena_info_topic', default_value='/arena_info'
     )
@@ -27,6 +31,7 @@ def generate_launch_description():
         'playground', default_value='highway_lite'
     )
 
+    # 固定创建十个同参数 agent，仅 ego_id 和 ctrl 输出 topic 不同。
     onlane_ai_agent_nodes = []
     for i in range(1, 11):
         onlane_ai_agent_nodes.append(Node(
@@ -53,6 +58,7 @@ def generate_launch_description():
             ]
         ))
 
+    # 先注册参数/日志，再展开全部 Node action。
     return LaunchDescription([
         arena_info_topic,
         arena_info_static_topic,

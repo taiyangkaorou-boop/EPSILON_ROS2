@@ -1,4 +1,5 @@
 <launch>
+  <!-- 遗留 ROS1 单 ego launch；ROS2 应使用 onlane_ego_agent_launch.py。 -->
   <arg name="arena_info_topic" value="/arena_info" />
   <arg name="arena_info_static_topic" value="/arena_info_static" />
   <arg name="arena_info_dynamic_topic" value="/arena_info_dynamic" />
@@ -10,6 +11,7 @@
   <!-- <arg name="playground" value = "ring_tiny_v1.0" /> -->
   <!-- <arg name="playground" value = "ring_small_v1.0" /> -->
 
+  <!-- 启动 ID 0，并把控制输出映射到 /ctrl/agent_0。 -->
   <node pkg="ai_agent_planner" type="onlane_ai_agent" name="onlane_ai_agent_0" output="screen">
     <param name="ego_id" type="int" value="0" />
     <param name="agent_config_path" type="string" value="$(find playgrounds)/$(arg playground)/agent_config.json" />

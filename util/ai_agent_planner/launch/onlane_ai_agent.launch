@@ -1,4 +1,6 @@
 <launch>
+  <!-- 遗留 ROS1 多车 launch：固定启动 ID 1..10；ROS2 应使用同名 *_launch.py。 -->
+  <!-- 此文件 autonomous_level 默认 2，与 ROS2 Python 版本默认 3 不一致。 -->
   <arg name="arena_info_topic" value="/arena_info" />
   <arg name="arena_info_static_topic" value="/arena_info_static" />
   <arg name="arena_info_dynamic_topic" value="/arena_info_dynamic" />
@@ -9,6 +11,7 @@
 
   <arg name="playground" value = "highway_lite" />
 
+  <!-- 十个节点除 ego_id 和 ctrl remap 外使用相同驾驶参数。 -->
   <node pkg="ai_agent_planner" type="onlane_ai_agent" name="onlane_ai_agent_1" output="screen">
     <param name="ego_id" type="int" value="1" />
     <param name="agent_config_path" type="string" value="$(find playgrounds)/$(arg playground)/agent_config.json" />
