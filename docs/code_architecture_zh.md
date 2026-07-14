@@ -94,7 +94,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.3b3 BehaviorPlanner ROS 服务与可视化。
 - [ ] M0.3c SemanticMapManager 支撑组件与主类。
 - [x] M0.3c1 SemanticMapManager 基础配置类型与 JSON ConfigLoader。
-- [ ] M0.3c2 TrafficSignalManager。
+- [x] M0.3c2 TrafficSignalManager。
 - [ ] M0.3c3 DataRenderer。
 - [ ] M0.3c4 ROS adapter。
 - [ ] M0.3c5 SemanticMapManager visualizer。
@@ -738,3 +738,26 @@ package.xml/CMake 对直接依赖的声明也不完整，当前可能依赖传�
 头文件还未直接包含其实际使用的 string/fstream 依赖，依赖其他头的传递包含。M1 应为
 配置类型提供完整确定性默认值，采用临时对象事务式解析和 schema 校验，区分文件、语法、
 缺键、无匹配 ego 等错误，并让所有功能开关可显式配置和可测试。
+
+## 40. M0.3c2：TrafficSignalManager 限速作用区间
+
+- 构造函数立即调用 `LoadSignals`；当前 google_urban/highway 的全部限速示例均被注释，
+  因此默认限速和交通灯列表都为空，`Init` 也只是固定成功的占位入口；
+- `CheckIntersectionTypeWithSignal` 把信号首尾点投影到参考 Lane。只有首点纵向弧长不晚于
+  尾点，且首尾点的 lateral_range 平移后都覆盖 Lane 中心 d=0，才认为信号与 Lane 相交；
+  自车在起点前为 Ahead，在 `[start_s,end_s)` 内为 Controlled，其他位置不相交；
+- `GetSpeedLimit` 先投影自车状态，再逐个检查限速。当前速度高于信号最大速度时，以固定
+  1 m/s² 计算 `|v_limit²-v²|/(2a)` 制动距离；信号起点进入该距离或自车已在控制区时，
+  限速生效。多个信号取最小最大速度；无信号时成功输出 `kInf`；
+- `UpdateSignals` 遍历并永久删除当前时刻不在 valid_time 闭区间内的限速。交通灯列表不
+  更新，`GetTrafficStoppingState` 也不写输出，仅固定返回成功。
+
+已确认的后续修复/验证点：信号完全硬编码且当前为空，重复 LoadSignals 也不先清容器。
+UpdateSignals 会把“尚未开始”的未来信号同过期信号一样永久删除，时间回拨或仿真循环后
+无法恢复；它也不处理交通灯。所有输出指针、Lane 有效性、时间和数值有限性均未校验。
+相交判断只是两个投影端点和 Lane 中心的启发式，不使用自车横向位置、信号首尾朝向、
+真实几何交集或 Lane 拓扑；略微反向的投影还会因 kEPS 被接受。限速只使用 vel_range 的
+上界，固定减速度、严格小于阈值和零/负速度边界均未解释。无信号返回 `kInf` 虽可作为
+“无约束”哨兵，但调用方必须正确处理。停车状态接口“成功但未赋值”会传播未初始化数据，
+属于 M1 必须优先消除的静态可确认错误。后续应改为不可变信号全集加按时刻查询，接入
+地图/仿真信号源，并统一限速、红灯、停车线的 Lane-aware 时空约束输出。
