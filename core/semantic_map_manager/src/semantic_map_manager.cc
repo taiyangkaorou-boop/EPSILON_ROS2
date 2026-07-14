@@ -1429,16 +1429,19 @@ ErrorType SemanticMapManager::GetLeadingVehicleOnLane(
   common::StateTransformer stf(ref_lane);
   common::FrenetState ref_fs;
   Vecf<2> lane_pt;
+  // 先把参考状态投影到 Lane；失败时不写前车输出。
   if (stf.GetFrenetStateFromState(ref_state, &ref_fs) != kSuccess) {
     return kWrongStatus;
   }
   ref_lane.GetPositionByArcLength(ref_fs.vec_s[0], &lane_pt);
   // Vecf<2> offset = ref_state.vec_position - lane_pt;
 
+  // lane_width、find_occupied 和 virtual_vehicle 是未使用的预留变量。
   const decimal_t lane_width = 3.5;
   const decimal_t search_lat_radius = lat_range;
   const decimal_t max_forward_search_dist = 120.0;
   decimal_t search_lon_offset = 0.0;
+  // 纵向采样分辨率与横向搜索半径成正比：resolution=lat_range/1.4。
   decimal_t resolution = search_lat_radius / 1.4;
 
   int leading_vehicle_id = kInvalidAgentId;
@@ -1447,6 +1450,7 @@ ErrorType SemanticMapManager::GetLeadingVehicleOnLane(
   bool find_occupied = false;
   common::Vehicle virtual_vehicle;
 
+  // 从参考弧长前一个 resolution 开始，沿 Lane 最多向前扫描 120 m。
   for (decimal_t s = ref_fs.vec_s[0] + resolution + search_lon_offset;
        s < ref_fs.vec_s[0] + max_forward_search_dist + search_lon_offset;
        s += resolution) {
@@ -1455,11 +1459,14 @@ ErrorType SemanticMapManager::GetLeadingVehicleOnLane(
     // lane_pt = lane_pt + offset;
 
     for (const auto &entry : vehicle_set.vehicles) {
+      // 每个 Lane 采样点线性遍历全部车辆，跳过内部 ID 无效项。
       if (entry.second.id() == kInvalidAgentId) continue;
+      // 车辆中心进入采样点圆形半径即命中；同一采样点多车取容器遍历首项。
       if ((lane_pt - entry.second.state().vec_position).squaredNorm() <
           search_lat_radius * search_lat_radius) {
         find_leading_vehicle_in_set = true;
         leading_vehicle_id = entry.first;
+        // residual ratio 按命中采样点距 120 m 搜索终点的剩余比例计算。
         *distance_residual_ratio =
             (max_forward_search_dist - delta_s) / max_forward_search_dist;
         break;
@@ -1470,6 +1477,7 @@ ErrorType SemanticMapManager::GetLeadingVehicleOnLane(
   }
 
   if (find_leading_vehicle_in_set) {
+    // 使用命中的容器 key 回查并复制前车。
     auto it = vehicle_set.vehicles.find(leading_vehicle_id);
     *leading_vehicle = it->second;
   } else {
@@ -1482,6 +1490,7 @@ ErrorType SemanticMapManager::GetFollowingVehicleOnLane(
     const common::Lane &ref_lane, const common::State &ref_state,
     const common::VehicleSet &vehicle_set, const decimal_t &lat_range,
     common::Vehicle *following_vehicle) const {
+  // 把参考状态投影到 Lane；失败时不写后车输出。
   common::StateTransformer stf(ref_lane);
   common::FrenetState ref_fs;
   if (stf.GetFrenetStateFromState(ref_state, &ref_fs) != kSuccess) {
@@ -1489,6 +1498,7 @@ ErrorType SemanticMapManager::GetFollowingVehicleOnLane(
     return kWrongStatus;
   }
 
+  // 后向搜索不超过 100 m，也不越过参考 Lane begin；容差直接使用 lat_range。
   const decimal_t lane_width_tol = lat_range;
   decimal_t max_backward_search_dist =
       std::min(ref_fs.vec_s[0] - ref_lane.begin(), 100.0);
@@ -1498,11 +1508,13 @@ ErrorType SemanticMapManager::GetFollowingVehicleOnLane(
 
   bool find_following_vehicle_in_set = false;
 
+  // 从后方一个 lat_range/1.4 步长开始扫描，并在 Lane 起点前保留 2*lat_range 裕量。
   for (decimal_t delta_s = lane_width_tol / 1.4;
        delta_s < max_backward_search_dist - 2.0 * lane_width_tol;
        delta_s += lane_width_tol / 1.4) {
     ref_lane.GetPositionByArcLength(ref_fs.vec_s[0] - delta_s, &lane_pt);
     for (auto &entry : vehicle_set.vehicles) {
+      // 与前车相同，按车辆中心到采样点欧氏距离命中，首个容器项胜出。
       if (entry.second.id() == kInvalidAgentId) continue;
       if ((lane_pt - entry.second.state().vec_position).norm() <
           lane_width_tol) {
@@ -1516,6 +1528,7 @@ ErrorType SemanticMapManager::GetFollowingVehicleOnLane(
   }
 
   if (find_following_vehicle_in_set) {
+    // 使用容器 key 回查并复制命中后车。
     auto it = vehicle_set.vehicles.find(following_vehicle_id);
     *following_vehicle = it->second;
   } else {
@@ -1527,18 +1540,22 @@ ErrorType SemanticMapManager::GetFollowingVehicleOnLane(
 ErrorType SemanticMapManager::GetSpeedLimit(const State &state,
                                             const Lane &lane,
                                             decimal_t *speed_limit) const {
+  // 不增加额外逻辑，直接透传给 traffic_singal_manager_。
   return traffic_singal_manager_.GetSpeedLimit(state, lane, speed_limit);
 }
 
 ErrorType SemanticMapManager::GetTrafficStoppingState(
     const State &state, const Lane &lane, State *stopping_state) const {
+  // 下层当前固定成功但不写 stopping_state，本层原样传播该语义。
   return traffic_singal_manager_.GetTrafficStoppingState(state, lane,
                                                          stopping_state);
 }
 
 bool SemanticMapManager::IsLocalLaneContainsLane(const int &local_lane_id,
                                                  const int &seg_lane_id) const {
+  // fast LUT 未构建时直接返回 false。
   if (!has_fast_lut_) return false;
+  // 按 local ID 用 .at 取 segment 列表值拷贝，再线性查找目标 segment。
   auto ids = local_to_segment_lut_.at(local_lane_id);
   if (ids.end() != std::find(ids.begin(), ids.end(), seg_lane_id)) {
     return true;
@@ -1546,33 +1563,36 @@ bool SemanticMapManager::IsLocalLaneContainsLane(const int &local_lane_id,
   return false;
 }
 
-// TODO(lu.zhang): Use general graph search instead in the future
+// TODO(lu.zhang): 后续应替换为完整、可终止的通用图最短路。
 ErrorType SemanticMapManager::GetDistanceOnLaneNet(const int &lane_id_0,
                                                    const decimal_t &arc_len_0,
                                                    const int &lane_id_1,
                                                    const decimal_t &arc_len_1,
                                                    decimal_t *dist) const {
+  // 预留 Dijkstra 风格容器：visited 集合和按 (cost,Lane ID) 排序的开放集合。
   std::unordered_set<int> visited_list;
   std::set<std::pair<decimal_t, int>> pq;
   pq.insert(std::pair<decimal_t, int>(0.0, lane_id_0));
   decimal_t cost_lane_change = 10.0;
 
+  // arc_len_0/arc_len_1 当前完全未参与初始/终止距离计算。
   int tar_node = lane_id_1;
   // decimal_t cost_aggre = -arc_len_0;
 
   while (!pq.empty()) {
+    // baseline 只读取 pq.begin，不弹出该节点。
     int cur_node = pq.begin()->second;
 
     if (cur_node == tar_node) {
-      // finish
+      // 起终 Lane 相同时立即跳出，但仍不会写 dist。
       break;
     }
     visited_list.insert(cur_node);
     std::vector<std::pair<int, decimal_t>> succ_nodes;
 
-    // get successors
+    // 构造 child 与可换左右 Lane 邻边；纵向边代价取当前 Lane 全长，换道固定 10。
     {
-      // child lane
+      // child Lane。
       if (!whole_lane_net_.lane_set.at(cur_node).child_id.empty()) {
         auto ids = whole_lane_net_.lane_set.at(cur_node).child_id;
         auto cost = whole_lane_net_.lane_set.at(cur_node).length;
@@ -1581,14 +1601,14 @@ ErrorType SemanticMapManager::GetDistanceOnLaneNet(const int &lane_id_0,
         }
       }
 
-      // left lane
+      // 左换道边。
       if (whole_lane_net_.lane_set.at(cur_node).l_change_avbl) {
         auto id = whole_lane_net_.lane_set.at(cur_node).l_lane_id;
         auto cost = cost_lane_change;
         succ_nodes.push_back(std::pair<int, decimal_t>(id, cost));
       }
 
-      // right lane
+      // 右换道边。
       if (whole_lane_net_.lane_set.at(cur_node).r_change_avbl) {
         auto id = whole_lane_net_.lane_set.at(cur_node).r_lane_id;
         auto cost = cost_lane_change;
@@ -1600,8 +1620,10 @@ ErrorType SemanticMapManager::GetDistanceOnLaneNet(const int &lane_id_0,
     //   auto id = succ_nodes[i].first;
     //   auto it = visited_list.find(id);
     // }
+    // succ_nodes 从未用于更新 pq，当前节点也未移除；不同目标 Lane 时循环不会终止。
   }
 
+  // 无论是否找到目标都固定返回成功，且从不写输出 dist。
   return kSuccess;
 }
 

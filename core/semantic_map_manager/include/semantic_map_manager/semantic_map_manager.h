@@ -140,12 +140,16 @@ class SemanticMapManager {
                                        const decimal_t max_reflane_dist,
                                        const decimal_t max_backward_dist,
                                        vec_Vecf<2> *samples) const;
+
+  /// 沿参考 Lane 向前离散采样最多 120 m，返回首个进入横向搜索半径的车辆。
   ErrorType GetLeadingVehicleOnLane(const common::Lane &ref_lane,
                                     const common::State &ref_state,
                                     const common::VehicleSet &vehicle_set,
                                     const decimal_t &lat_range,
                                     common::Vehicle *leading_vehicle,
                                     decimal_t *distance_residual_ratio) const;
+
+  /// 沿参考 Lane 向后离散采样最多 100 m，返回首个进入横向搜索半径的车辆。
   ErrorType GetFollowingVehicleOnLane(const common::Lane &ref_lane,
                                       const common::State &ref_state,
                                       const common::VehicleSet &vehicle_set,
@@ -163,12 +167,15 @@ class SemanticMapManager {
   /// 以追加 CSV 行的形式记录 ego 与全部周车状态；当前不写表头或地图级元数据。
   ErrorType SaveMapToLog();
 
+  /// 查询 local_to_segment_lut_ 中指定本地 Lane 是否包含原始 segment Lane ID。
   bool IsLocalLaneContainsLane(const int &local_lane_id,
                                const int &seg_lane_id) const;
 
+  /// 转发 TrafficSignalManager 的当前限速查询。
   ErrorType GetSpeedLimit(const State &state, const Lane &lane,
                           decimal_t *speed_limit) const;
 
+  /// 转发 TrafficSignalManager 的停车状态查询；下层当前为空实现。
   ErrorType GetTrafficStoppingState(const State &state, const Lane &lane,
                                     State *stopping_state) const;
 
@@ -320,6 +327,7 @@ class SemanticMapManager {
   /// 清空并重建全部语义周车的开环状态预测轨迹。
   ErrorType OpenloopTrajectoryPrediction();
 
+  /// 预留 LaneNet 有符号距离图搜索；当前实现不完整且不同 Lane 输入会无限循环。
   ErrorType GetDistanceOnLaneNet(const int &lane_id_0,
                                  const decimal_t &arc_len_0,
                                  const int &lane_id_1,

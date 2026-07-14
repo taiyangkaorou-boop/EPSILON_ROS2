@@ -92,20 +92,20 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.3b2c 安全/效率/行为代价评估。
 - [x] M0.3b2d 参考 Lane、Lane ID 状态机与参数访问器。
 - [x] M0.3b3 BehaviorPlanner ROS 服务与可视化。
-- [ ] M0.3c SemanticMapManager 支撑组件与主类。
+- [x] M0.3c SemanticMapManager 支撑组件与主类。
 - [x] M0.3c1 SemanticMapManager 基础配置类型与 JSON ConfigLoader。
 - [x] M0.3c2 TrafficSignalManager。
 - [x] M0.3c3 DataRenderer。
 - [x] M0.3c4 ROS adapter。
 - [x] M0.3c5 SemanticMapManager visualizer。
-- [ ] M0.3c6 SemanticMapManager 主类分段审计。
+- [x] M0.3c6 SemanticMapManager 主类分段审计。
 - [x] M0.3c6a 构造、UpdateSemanticMap、日志与基础访问器。
 - [x] M0.3c6b 行为/轨迹预测与语义车辆。
 - [x] M0.3c6c 语义 Lane、本地 Lane 与快速 LUT。
 - [x] M0.3c6d Lane 距离、碰撞、可达性与最近 Lane。
 - [x] M0.3c6e 关键车辆筛选。
 - [x] M0.3c6f 局部/参考 Lane 生成与采样。
-- [ ] M0.3c6g 前后车、交通查询与 LaneNet 距离。
+- [x] M0.3c6g 前后车、交通查询与 LaneNet 距离。
 - [ ] M0.4 SSC、车辆模型、物理仿真、playground 与配置。
 - [ ] M0.5 全仓覆盖审计和遗漏补齐。
 
@@ -996,3 +996,31 @@ ID，且可能使用上一帧陈旧 LUT。高质量拟合不检查最少样本/�
 长度自适应。无效 behavior 在 release 下 assert 消失后可能成功返回未初始化 target ID。
 M1 应统一受限图搜索与连续性评分、初始化并验证采样契约，并让 fast LUT 返回可按 state/
 路由裁剪的稳定候选而非任意整条 Lane。
+
+## 50. M0.3c6g：Lane 采样式前后车、交通转发与未完成图距离
+
+- 前车查询先投影参考状态，再以 `lat_range/1.4` 为纵向步长向前扫描最多 120 m；每个
+  Lane 点线性遍历 VehicleSet，车辆中心进入半径 lat_range 的圆即命中，并返回
+  `(120-delta_s)/120` 剩余比例；
+- 后车查询向后最多 100 m 且不越过 Lane begin，以相同步长扫描；循环终点额外保留
+  `2*lat_range` 裕量。前后车同一采样点有多个候选时都取无序容器遍历首项；
+- GetSpeedLimit/GetTrafficStoppingState 只透传 TrafficSignalManager；后者当前仍是成功但
+  不写输出的占位接口。IsLocalLaneContainsLane 在 fast LUT 有效时复制 local 对应 segment
+  列表并线性查找；未知 local ID 会由 `.at` 抛异常；
+- GetDistanceOnLaneNet 仅搭出 visited、优先集合和 child/左右邻边构造框架。它不弹出开放
+  节点、不把 successor 加回队列、不累计 cost，也不使用两个 arc_len 或写 dist。
+
+已确认的后续修复/验证点：前后车搜索是 Lane 点圆形采样而非车辆 Frenet/车身间距，可能
+命中交叉道路车辆、自车自身或同采样点的非最近哈希项；不排除 reference vehicle。Lane
+位置查询错误被忽略，搜索可越过 Lane end；lat_range<=0 会产生零/负步长和潜在死循环。
+前向从一个步长后开始，后向又跳过接近 Lane begin 的区间；固定 120/100 m、采样分辨率
+和 residual ratio 都不是实际保险杠净距。多个未使用变量表明静态占用/虚拟车逻辑未完成。
+交通停车未赋值问题继续向上传播。本地 Lane contains 每次复制 vector，且 has_fast_lut
+可能错误地对空/陈旧 LUT 为 true。最严重的是 GetDistanceOnLaneNet：lane0!=lane1 时 pq
+永不变化导致无限循环；相同 Lane 虽退出却返回成功且 dist 未初始化。该函数当前无调用，
+但属于 M1 必须删除、封禁或完整实现的静态错误。M1 应用一次车辆 Frenet 投影排序获取
+真实前后净距，并实现带 arc-length 边界、稳定代价和终止证明的 Dijkstra/A*。
+
+至此 M0.3c 已完成：SemanticMapManager 从 ROS 输入、感知渲染、语义 Lane/车辆、关键体、
+预测、碰撞、参考 Lane 到可视化的职责链已经建立中文索引；所有发现的逻辑问题仅登记，
+未混入本阶段注释提交，后续统一进入 M1 baseline 修复与回归用例设计。
