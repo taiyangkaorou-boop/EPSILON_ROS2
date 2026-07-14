@@ -1,23 +1,32 @@
 <launch>
+    <!--
+      ROS1 XML 风格的历史启动入口，仅用于兼容旧工作流和核对参数。
+      ROS2 Humble 的正式入口是同目录 test_ssc_with_eudm_ros_launch.py。
+    -->
+    <!-- 语义地图输入和自车控制输出话题。 -->
     <arg name="arena_info_static_topic" value="/arena_info_static" />
     <arg name="arena_info_dynamic_topic" value="/arena_info_dynamic" />
   
     <arg name="ctrl_topic" value="/ctrl/agent_0" />
   
+    <!-- 默认场景；切换场景时必须同时确认对应 agent_config.json 存在。 -->
     <arg name="playground" value = "highway_v1.0" />
     <!-- <arg name="playground" value = "ring_tiny_v1.0" /> -->
     <!-- <arg name="playground" value = "ring_small_v1.0" /> -->
   
+    <!-- 集成节点负责连接语义地图、EUDM 行为层和 SSC 运动层。 -->
     <node pkg="planning_integrated"
           type="test_ssc_with_eudm"
           name="test_ssc_with_eudm_0"
           output="screen">
+      <!-- 参数路径均从 ROS 包定位，避免写死工作空间绝对路径。 -->
       <param name="ego_id" type="int" value="0" />
       <param name="agent_config_path" type="string" value="$(find playgrounds)/$(arg playground)/agent_config.json" />
       <param name="bp_config_path" type="string" value="$(find eudm_planner)/config/eudm_config.pb.txt" />
       <param name="ssc_config_path" type="string" value="$(find ssc_planner)/config/ssc_config.pb.txt" />
       <param name="desired_vel" value="20.0"/>
       <param name="use_sim_state" value="true"/>
+      <!-- 将节点私有接口连接到仿真器和控制器的公共话题。 -->
       <remap from="~arena_info_static" to="$(arg arena_info_static_topic)"/>
       <remap from="~arena_info_dynamic" to="$(arg arena_info_dynamic_topic)"/>
       <remap from="~ctrl" to="$(arg ctrl_topic)"/>

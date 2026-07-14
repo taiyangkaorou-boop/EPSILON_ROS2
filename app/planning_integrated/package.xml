@@ -1,5 +1,6 @@
 <?xml version="1.0"?>
 <package format="3">
+  <!-- 系统集成包：启动语义地图、行为决策和 SSC 轨迹规划，不定义新消息。 -->
   <name>planning_integrated</name>
   <version>0.0.0</version>
   <description>planning_integrated</description>
@@ -8,7 +9,7 @@
   
   <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <!-- In ROS2, all dependencies are either <depend>, <build_depend>, <build_export_depend>, or <exec_depend> -->
+  <!-- 运行入口直接依赖 ROS2 通信、两个行为规划器、语义地图和 SSC 运动规划器。 -->
   <depend>rclcpp</depend>
   <depend>rclpy</depend>
   <depend>common</depend>
@@ -23,7 +24,7 @@
   <depend>message_filters</depend>
   <exec_depend>ros2launch</exec_depend>
 
-
+  <!-- 指定由 ament_cmake 负责配置、安装和导出本包。 -->
   <export>
     <build_type>ament_cmake</build_type>
   </export>

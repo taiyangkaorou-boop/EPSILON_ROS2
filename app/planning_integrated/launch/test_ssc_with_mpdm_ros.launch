@@ -1,16 +1,25 @@
 <launch>
+  <!--
+    ROS1 XML 风格的历史启动入口；ROS2 正式实验应使用同目录的 Python launch。
+    保留本文件用于迁移核对，不在此处承载任何规划算法。
+  -->
+  <!-- 语义地图输入和自车控制输出话题。 -->
   <arg name="arena_info_static_topic" value="/arena_info_static" />
   <arg name="arena_info_dynamic_topic" value="/arena_info_dynamic" />
   <arg name="ctrl_topic" value="/ctrl/agent_0" />
 
+  <!-- MPDM 默认使用轻量高速公路场景。 -->
   <arg name="playground" value = "highway_lite" />
 
+  <!-- 集成节点连接 MPDM 行为规划器、语义地图管理器和 SSC 规划器。 -->
   <node pkg="planning_integrated" type="test_ssc_with_mpdm" name="test_ssc_with_mpdm_0" output="screen">
+    <!-- 场景和规划参数由包路径解析，不能替换为开发机绝对路径。 -->
     <param name="ego_id" type="int" value="0" />
     <param name="agent_config_path" type="string" value="$(find playgrounds)/$(arg playground)/agent_config.json" />
     <param name="ssc_config_path" type="string" value="$(find ssc_planner)/config/ssc_config.pb.txt" />
     <param name="desired_vel" value="20.0"/>
     <param name="use_sim_state" value="true"/>
+    <!-- 对齐仿真环境和控制器的话题名称。 -->
     <remap from="~arena_info_static" to="$(arg arena_info_static_topic)"/>
     <remap from="~arena_info_dynamic" to="$(arg arena_info_dynamic_topic)"/>
 
