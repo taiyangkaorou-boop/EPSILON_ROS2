@@ -143,6 +143,8 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.5b1 ai_agent MPDM、单步控制与可视化入口。
 - [x] M0.5b2 ai_agent ROS2/legacy launch 与构建元数据。
 - [ ] M0.5c route_planner、vehicle_msgs 与公共 Planner 接口遗漏。
+- [x] M0.5c1 route_planner 随机导航状态机与构建元数据。
+- [ ] M0.5c2 vehicle_msgs 编解码、消息 schema 与公共 Planner 接口。
 - [ ] M0.5d 第一方包构建元数据补注释。
 - [ ] M0.5e 全仓函数/文件覆盖复核与 M0 结束标签。
 
@@ -1932,3 +1934,31 @@ launch 参数类型/缺资源、1/10/20 agent 启停及 install-space `ros2 laun
 
 至此 M0.5b 已完成：AI agent 的地图-行为-控制闭环、随机性缺口、ROS2/ROS1 启动差异和构建依赖均已
 形成中文职责与静态风险索引。下一阶段 M0.5c 转向 route_planner、vehicle_msgs 和公共 Planner 接口。
+
+## 78. M0.5c1：RoutePlanner 随机 Lane 拓扑扩展与导航状态机
+
+- RoutePlanner 由 MPDM BehaviorPlanner 持有，接收完整 LaneNet、自车状态和最近 Lane；默认
+  kRandomExpansion 从最近 Lane 开始随机选择 child，累计约 200 m，拼接 Lane 中心线并拟合连续
+  navi_lane，导航路径用于 MPDM 最近 Lane、候选参考 Lane 和局部采样的拓扑约束；
+- 状态机为 ReadyToGo -> InProgress -> Finished；finished 且 if_restart=true 时回到 ready；
+  RunOnce 忽略模式循环返回码，最终以 navi_lane.IsValid 判定成功；
+- 随机路径逐 Lane 累加 child 长度，遇到无 child 提前终止；拟合后将自车投影到 navi_lane，保存
+  start/current arc length 和剩余路径长度；GetChildLaneIds 使用 assign 覆盖输出；
+- CMake 构建/导出 hkust_pl_rp 并安装公共头，当前还声明/链接 common 之外的 SMM 与 ROS 依赖。
+
+已确认的后续修复/验证点：CheckNaviProgress 不更新 navi_cur_arc_len 或计算比例，每次 in-progress 都
+无条件置 finished；因此默认自动重启会按状态机周期反复重抽路径，而非到达末端后重规划。
+CheckIfArriveTargetLane 才比较尾 Lane，但无调用且空 path 时解引用 rbegin 崩溃。AssignedTarget 固定
+返回成功却不生成路径，随后依赖旧 navi_lane 或失败。Init 忽略 config；nearest_lane_id_ 未初始化，
+set_lane_net 按值复制大地图。随机扩展忽略 GetChildLaneIds 失败，起始/child ID 不存在时多处 `.at`
+抛异常；用 `floor(rd/(max/n_child))` 映射 random_device，当 rd==max 可得到 n_child 越界，且有取整偏差、
+不可注入 seed。没有 visited/depth/非正长度保护，环路和零长度 Lane 可不终止。中心线拼接对每个后续
+Lane 无条件跳过点 0，连接不重合时产生几何缺口；第二次自车弧长查询返回码被忽略。硬编码 200 m、
+无 route target/代价/车道封闭/交通规则/全局连通性，navi_path/navi_lane getter 又深拷贝。
+BehaviorPlanner::RunRoutePlanner 还吞掉地图查询和 RunOnce 失败，因此可能继续使用旧导航。
+CMake 注释历史称 C++14 但设置 17，无条件 Release/-O3，模块目录不存在，直接链接内部 target；源码
+只需 common，却声明 rclcpp/rclpy/visualization/sensor/SMM，package 元数据仍 0.0.0/TODO，无测试。
+M1 应先用可 seed 的 mt19937+uniform_int_distribution、visited/最大深度和 ID/长度校验修复随机模式，
+按自车投影真实更新进度；随后实现 Dijkstra/A*/lane-graph route 到指定目标并支持 route cost/规则，
+将随机路由仅用于可复现实验扰动。测试覆盖空/单 Lane、分叉、环、零长度、缺失 child、rd 边界、
+指定目标可达/不可达、真实进度、重复 seed、几何接缝、地图更新和 MPDM 错误传播。

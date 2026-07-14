@@ -6,16 +6,16 @@
   <maintainer email="wdingae@todo.com">HKUST_UAV_GROUP</maintainer>
   <license>TODO</license>
 
-  <!-- Build and run dependencies -->
+  <!-- ament 与当前声明的构建/运行依赖；多项 ROS 依赖未被源码直接使用。 -->
   <buildtool_depend>ament_cmake</buildtool_depend>
-  <depend>rclcpp</depend>  <!-- For C++ nodes -->
-  <depend>rclpy</depend>   <!-- For Python nodes -->
+  <depend>rclcpp</depend>
+  <depend>rclpy</depend>
   <depend>common</depend>
   <depend>semantic_map_manager</depend>
   <depend>visualization_msgs</depend>
   <depend>sensor_msgs</depend>
 
-  <!-- Export tags can include additional information needed for other tools -->
+  <!-- 声明标准 ament_cmake 构建类型。 -->
   <export>
     <build_type>ament_cmake</build_type>
   </export>
