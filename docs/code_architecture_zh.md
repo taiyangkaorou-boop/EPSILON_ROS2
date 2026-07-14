@@ -87,7 +87,10 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.3a2a 目标车道间隙状态与高级 LK/LC 单步传播。
 - [x] M0.3a2b 标准单步传播、控制器辅助函数与车辆模型积分。
 - [x] M0.3b1 BehaviorPlannerMapItf 与 SemanticMapManager 适配器。
-- [ ] M0.3b2 BehaviorPlanner 核心候选生成、评估与决策。
+- [x] M0.3b2a BehaviorPlanner 生命周期、候选枚举与 MPDM winner 输出。
+- [ ] M0.3b2b 多车前向 rollout 与碰撞筛选。
+- [ ] M0.3b2c 安全/效率/行为代价评估。
+- [ ] M0.3b2d 参考 Lane、Lane ID 状态机与参数访问器。
 - [ ] M0.3b3 BehaviorPlanner ROS 服务与可视化。
 - [ ] M0.3c SemanticMapManager 支撑组件与主类。
 - [ ] M0.4 SSC、车辆模型、物理仿真、playground 与配置。
@@ -567,3 +570,19 @@ Pure Pursuit 不检查零世界前视距离；角度归一化只回绕一次。�
 SemanticLaneSet；两个最近 Lane 函数各保留未使用的 `dist_set`。`CheckIfCollision` 忽略
 底层错误码，`GetPredictedBehavior` 用 `.at(vehicle_id)`，缺失 ID 会抛异常而不是返回
 ErrorType。M1 应统一空指针/异常边界并增加 const、虚析构和轻量只读视图。
+
+## 33. M0.3b2a：BehaviorPlanner 生命周期与候选决策主流程
+
+- `Init` 创建 RoutePlanner；`RunOnce` 查询自车 Lane/车辆，按需要刷新导航路径，更新
+  Lane ID 与当前行为，L3 及以上调用 MPDM，最后为输出行为构造参考 Lane；
+- MPDM 候选始终包含 LK，左右换道仅在相应潜在 Lane ID 缓存非空时加入；
+- 每辆语义周车根据预测横向行为构造至少 50 m 的参考 Lane，随后每个自车候选独立
+  rollout，失败候选被丢弃；有效候选统一评估 winner 并缓存供 SemanticBehavior 输出；
+- winner 速度相对当前速度限制为最多 5 m/s 跳变，HMI 锁定可在有效候选中覆盖横向行为。
+
+已确认的后续修复/验证点：Init 忽略 config、使用裸 new 且类无析构，重复初始化泄漏；
+RunRoutePlanner 忽略全部地图查询和 RoutePlanner 失败并固定成功。RunOnce 未验证地图/
+RoutePlanner 指针，多处更新返回码被忽略，初始 Lane 判断还使用 Agent 无效常量。
+`previous_desired_vel` 参数完全未使用，没有跨周期速度平滑/迟滞；HMI 覆盖横向 winner
+时仍输出原 MPDM winner 的期望速度，横纵向策略可能不一致。5 m/s 限幅后也不保证
+非负速度。候选 Lane 依赖上周期缓存，日志在每周期大量输出。

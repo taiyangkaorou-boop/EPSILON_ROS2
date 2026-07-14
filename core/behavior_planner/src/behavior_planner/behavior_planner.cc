@@ -2,16 +2,20 @@
 
 namespace planning {
 
+// 返回通用行为规划器名称。
 std::string BehaviorPlanner::Name() {
   return std::string("Generic behavior planner");
 }
 
+// 创建 RoutePlanner 并初始化输出速度；config 当前未解析。
 ErrorType BehaviorPlanner::Init(const std::string config) {
+  // 重复 Init 会覆盖裸指针而不释放旧对象。
   p_route_planner_ = new planning::RoutePlanner();
   behavior_.actual_desired_velocity = 0.0;
   return kSuccess;
 }
 
+// 调用多行为决策并把 winner、全部候选 rollout 和周车轨迹写入 SemanticBehavior。
 ErrorType BehaviorPlanner::RunMpdm() {
   TicToc timer;
   LateralBehavior mpdm_behavior;
@@ -35,9 +39,9 @@ ErrorType BehaviorPlanner::RunMpdm() {
   return kSuccess;
 }
 
+// 以随机扩展模式刷新导航路径；底层查询和 RunOnce 失败均未向上返回。
 ErrorType BehaviorPlanner::RunRoutePlanner(const int nearest_lane_id) {
   TicToc timer_rp;
-  // ~ Run route planner
   p_route_planner_->set_navi_mode(RoutePlanner::NaviMode::kRandomExpansion);
   if (!p_route_planner_->if_get_lane_net()) {
     common::LaneNet whole_lane_net;
@@ -50,16 +54,12 @@ ErrorType BehaviorPlanner::RunRoutePlanner(const int nearest_lane_id) {
   p_route_planner_->set_nearest_lane_id(nearest_lane_id);
   if (p_route_planner_->RunOnce() == kSuccess) {
   }
-  // printf("[RoutePlanner]succeed in time %lf ms.\n", timer_rp.toc());
   return kSuccess;
 }
 
+// 完成单周期车道归属、候选行为、MPDM winner 和参考 Lane 更新。
 ErrorType BehaviorPlanner::RunOnce() {
-  // ~ The class which inherits this generic bp would probably need
-  // ~ to implement the following logics.
-  // ~ step 1: parse the navigation message if any
-  // ~ step 2: decision making on the applicable behavior set
-  // ~ step 3: construct complete semantic bahavior
+  // 先使用 RoutePlanner 当前导航路径确定自车最近 Lane。
   int ego_lane_id_by_pos = kInvalidLaneId;
   if (map_itf_->GetEgoLaneIdByPosition(p_route_planner_->navi_path(),
                                        &ego_lane_id_by_pos) != kSuccess) {
@@ -74,10 +74,12 @@ ErrorType BehaviorPlanner::RunOnce() {
   }
   ego_id_ = ego_vehicle.id();
 
+  // 仿真状态模式下刷新随机扩展导航路径；返回码被忽略。
   if (use_sim_state_) {
     RunRoutePlanner(ego_lane_id_by_pos);
   }
 
+  // 首周期初始化内部 Lane ID；这里使用 Agent 无效常量而非 Lane 无效常量。
   if (ego_lane_id_ == kInvalidAgentId) {
     UpdateEgoLaneId(ego_lane_id_by_pos);
   }
@@ -98,8 +100,7 @@ ErrorType BehaviorPlanner::RunOnce() {
   }
 
   if (behavior_.lat_behavior == common::LateralBehavior::kUndefined) {
-    // printf("[RunOnce]Err - Undefined system behavior!.\n");
-    // ! temporal solution lane keep at the current lane.
+    // 未定义行为临时回退为保持车道。
     behavior_.lat_behavior = common::LateralBehavior::kLaneKeeping;
   }
 
@@ -109,14 +110,8 @@ ErrorType BehaviorPlanner::RunOnce() {
     planning::MultiModalForward::ParamLookUp(aggressive_level_, &sim_param_);
     if (RunMpdm() != kSuccess) {
       printf("[Summary]Mpdm failed: %lf ms.\n", timer.toc());
-      // printf("[Stuck]Ego id %d on lane %d with behavior %d mpdm failed.\n",
-      //        ego_vehicle.id(), ego_lane_id_,
-      //        static_cast<int>(behavior_.lat_behavior));
       return kWrongStatus;
     } else {
-      // printf("[Stuck]Ego id %d on lane %d with behavior %d mpdm success.\n",
-      //        ego_vehicle.id(), ego_lane_id_,
-      //        static_cast<int>(behavior_.lat_behavior));
     }
     printf("[Summary]Mpdm time cost: %lf ms.\n", timer.toc());
   }
@@ -128,10 +123,11 @@ ErrorType BehaviorPlanner::RunOnce() {
   return kSuccess;
 }
 
+// 枚举 LK/LCL/LCR，补全周车参考 Lane，执行 rollout 并选择最低代价策略。
 ErrorType BehaviorPlanner::MultiBehaviorJudge(
     const decimal_t previous_desired_vel, LateralBehavior* mpdm_behavior,
     decimal_t* mpdm_desired_velocity) {
-  // * get relevant information
+  // 获取语义关键周车和自车快照。
   common::SemanticVehicleSet semantic_vehicle_set;
   if (map_itf_->GetKeySemanticVehicles(&semantic_vehicle_set) != kSuccess) {
     printf("[MPDM]fail to get key vehicles.\n");
@@ -148,12 +144,12 @@ ErrorType BehaviorPlanner::MultiBehaviorJudge(
             << "\tsemantic_vehicle_set num:"
             << semantic_vehicle_set.semantic_vehicles.size() << std::endl;
 
-  // * clean the states
+  // 清空上一周期调试/输出缓存。
   forward_trajs_.clear();
   forward_behaviors_.clear();
   surround_trajs_.clear();
 
-  // * collect potential behaviors
+  // LK 始终候选，左右换道取决于前序 Lane 拓扑缓存是否非空。
   std::vector<LateralBehavior> potential_behaviors{
       common::LateralBehavior::kLaneKeeping};
   if (!potential_lcl_lane_ids_.empty())
@@ -161,7 +157,7 @@ ErrorType BehaviorPlanner::MultiBehaviorJudge(
   if (!potential_lcr_lane_ids_.empty())
     potential_behaviors.push_back(common::LateralBehavior::kLaneChangeRight);
 
-  // * construct <vehicle, ref_lane> pairs
+  // 按每辆周车的预测横向行为构造 rollout 参考 Lane。
   const decimal_t max_backward_len = 10.0;
   for (auto it = semantic_vehicle_set.semantic_vehicles.begin();
        it != semantic_vehicle_set.semantic_vehicles.end(); ++it) {
@@ -180,13 +176,12 @@ ErrorType BehaviorPlanner::MultiBehaviorJudge(
     }
   }
 
-  // * forward simulation
+  // 对每个候选自车行为独立执行多车前向仿真，失败候选直接丢弃。
   std::vector<LateralBehavior> valid_behaviors;
   vec_E<vec_E<common::Vehicle>> valid_forward_trajs;
   vec_E<std::unordered_map<int, vec_E<common::Vehicle>>> valid_surround_trajs;
   int num_available_behaviors = static_cast<int>(potential_behaviors.size());
 
-  // TicToc timer;
   for (int i = 0; i < num_available_behaviors; i++) {
     vec_E<common::Vehicle> traj;
     std::unordered_map<int, vec_E<common::Vehicle>> sur_trajs;
@@ -201,15 +196,12 @@ ErrorType BehaviorPlanner::MultiBehaviorJudge(
     valid_forward_trajs.push_back(traj);
     valid_surround_trajs.push_back(sur_trajs);
   }
-  // printf("[Summary]Time in simulate all the behaviors: %lf ms.\n",
-  // timer.toc());
-
-  // ! cache
+  // 缓存所有有效候选，供输出语义和可视化使用。
   forward_behaviors_ = valid_behaviors;
   forward_trajs_ = valid_forward_trajs;
   surround_trajs_ = valid_surround_trajs;
 
-  // * judge forward trajs
+  // 至少需要一个有效候选，再进入统一代价评估。
   int num_valid_behaviors = static_cast<int>(valid_behaviors.size());
   if (num_valid_behaviors < 1) {
     printf("[MPDM]No valid behaviors.\n");
@@ -226,11 +218,7 @@ ErrorType BehaviorPlanner::MultiBehaviorJudge(
     printf("[MPDM]fail to evaluate multiple policy trajs.\n");
     return kWrongStatus;
   }
-  // printf("[Stuck]id: %d choose behavior %d with cost: %lf.\n",
-  // ego_vehicle.id(),
-  //        static_cast<int>(winner_behavior), winner_score);
-
-  // * output
+  // 速度命令相对当前车速最多跳变 5 m/s；未额外截断为非负。
   const decimal_t max_vel_cmd_gap = 5.0;
   if (fabs(winner_desired_vel - ego_vehicle.state().velocity) >
       max_vel_cmd_gap) {
@@ -242,6 +230,7 @@ ErrorType BehaviorPlanner::MultiBehaviorJudge(
   }
 
   if (lock_to_hmi_) {
+    // HMI 行为存在于有效候选时只覆盖横向 winner，速度仍使用原 MPDM winner 的结果。
     auto it = std::find(forward_behaviors_.begin(), forward_behaviors_.end(),
                         hmi_behavior_);
     if (it != forward_behaviors_.end()) {
@@ -252,6 +241,7 @@ ErrorType BehaviorPlanner::MultiBehaviorJudge(
   } else {
     *mpdm_behavior = winner_behavior;
   }
+  // previous_desired_vel 当前未参与任何平滑或迟滞计算。
   *mpdm_desired_velocity = winner_desired_vel;
   return kSuccess;
 }

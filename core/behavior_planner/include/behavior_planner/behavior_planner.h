@@ -16,18 +16,28 @@
 #include "forward_simulator/onlane_forward_simulation.h"
 namespace planning {
 
+/**
+ * @brief 基于多策略决策（MPDM）的车道级行为规划器。
+ *
+ * 规划器维护自车 Lane 归属与可达左右候选，针对 LK/LCL/LCR 做多车前向 rollout，
+ * 评估安全、效率和动作代价，输出 SemanticBehavior 及参考 Lane。
+ */
 class BehaviorPlanner : public Planner {
  public:
   using State = common::State;
   using Lane = common::Lane;
   using Behavior = common::SemanticBehavior;
   using LateralBehavior = common::LateralBehavior;
+  /// 返回规划器显示名称。
   std::string Name() override;
 
+  /// 初始化 RoutePlanner 和行为输出；当前忽略 config 字符串。
   ErrorType Init(const std::string config) override;
 
+  /// 执行车道归属更新、候选决策、MPDM 和参考 Lane 构造。
   ErrorType RunOnce() override;
 
+  /// 注入非拥有的地图接口裸指针。
   void set_map_interface(BehaviorPlannerMapItf* itf);
   /**
    * @brief set desired velocity
@@ -52,8 +62,10 @@ class BehaviorPlanner : public Planner {
 
   void set_aggressive_level(int level);
 
+  /// 更新 RoutePlanner 的地图、自车状态和最近 Lane，并运行一次导航扩展。
   ErrorType RunRoutePlanner(const int nearest_lane_id);
 
+  /// 运行多行为评估并把 winner 写入 behavior_。
   ErrorType RunMpdm();
 
   Behavior behavior() const;
@@ -74,6 +86,7 @@ class BehaviorPlanner : public Planner {
 
   ErrorType ConstructLaneFromSamples(const vec_E<Vecf<2>>& samples, Lane* lane);
 
+  /// 生成可用 LK/LCL/LCR rollout，评估 winner 并输出速度命令。
   ErrorType MultiBehaviorJudge(const decimal_t previous_desired_vel,
                                LateralBehavior* mpdm_behavior,
                                decimal_t* actual_desired_velocity);
