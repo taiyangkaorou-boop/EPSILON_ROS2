@@ -991,11 +991,8 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Get the Ros Marker Using Circle Obstacle object
-   *
-   * @param obs
-   * @param p_marker
-   * @return ErrorType
+   * @brief 把圆形静态障碍物转换为 map 坐标系半透明 CYLINDER Marker。
+   * @note Marker id 直接使用障碍物 id，并继承圆柱 orientation 未初始化问题。
    */
   static ErrorType GetRosMarkerUsingCircleObstacle(
       const CircleObstacle& obs, visualization_msgs::msg::Marker* p_marker) {
@@ -1007,17 +1004,14 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Get the Ros Marker Using Polygon Obstacle object
-   *
-   * @param obs
-   * @param id
-   * @param p_marker
-   * @return ErrorType
+   * @brief 复制多边形顶点、追加首点闭合后构造固定 z=-0.2 的 LINE_STRIP。
+   * @note 空多边形仍解引用 begin()，当前存在越界风险。
    */
   static ErrorType GetRosMarkerUsingPolygonObstacle(
       const PolygonObstacle& obs, const int& id,
       visualization_msgs::msg::Marker* p_marker) {
     std::vector<Point> points = obs.polygon.points;
+    // 通过重复首顶点显式闭合线条；输入为空时该解引用无效。
     points.push_back(*(points.begin()));
     for (auto& p : points) {
       p.z = -0.2;
@@ -1030,11 +1024,8 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Get the Ros Marker Using Obstacle Set object
-   *
-   * @param obstacles
-   * @param p_marker_array
-   * @return ErrorType
+   * @brief 将圆障碍和多边形障碍按 type 分派为圆柱、轮廓线或交通锥网格。
+   * @note 输出追加到 MarkerArray；未知 polygon type 静默忽略。
    */
   static ErrorType GetRosMarkerUsingObstacleSet(
       const ObstacleSet& obstacles,
@@ -1044,6 +1035,7 @@ class VisualizationUtil {
       GetRosMarkerUsingCircleObstacle(p_obs.second, &obs_marker);
       p_marker_array->markers.push_back(obs_marker);
     }
+    // 多边形 id 从 0 独立计数，可能与圆障碍 id 在默认空 namespace 中冲突。
     int id_cnt = 0;
     for (const auto& p_obs : obstacles.obs_polygon) {
       switch (p_obs.second.type) {
@@ -1055,6 +1047,7 @@ class VisualizationUtil {
           break;
         }
         case 1: {
+          // type=1 把每个多边形顶点显示为一个交通锥，而不连接轮廓。
           for (const auto& pt : p_obs.second.polygon.points) {
             visualization_msgs::msg::Marker obs_marker;
             Vec3f pos(pt.x, pt.y, 0.4);
@@ -1073,16 +1066,13 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Get the Ros Marker Arr Using Semantic Behavior object
-   *
-   * @param behavior
-   * @param p_marker_array
-   * @return ErrorType
+   * @brief 可视化语义行为的参考车道方向、曲率、纵向意图和周车 rollout。
+   * @note 使用固定 id 分区并向现有 MarkerArray 追加大量点/线 Marker。
    */
   static ErrorType GetRosMarkerArrUsingSemanticBehavior(
       const SemanticBehavior& behavior,
       visualization_msgs::msg::MarkerArray* p_marker_array) {
-    // lane direction marker
+    // 第一部分：沿参考车道每 5 m 绘制一对方向短线。
     {
       if (behavior.ref_lane.IsValid()) {
         visualization_msgs::msg::Marker direction_mk;
@@ -1091,7 +1081,8 @@ class VisualizationUtil {
         direction_mk.id = 0;
         direction_mk.type = visualization_msgs::msg::Marker::LINE_LIST;
         direction_mk.action = visualization_msgs::msg::Marker::MODIFY;
-        decimal_t angle = 0.0;  // angle between horizontal line & direction
+        // angle 控制短线相对车道法向的旋转；颜色编码横/纵向行为。
+        decimal_t angle = 0.0;
         if (behavior.lat_behavior == common::LateralBehavior::kLaneChangeLeft ||
             behavior.lat_behavior ==
                 common::LateralBehavior::kLaneChangeRight) {
@@ -1122,6 +1113,7 @@ class VisualizationUtil {
           ConvertVectorToPoint<2>(pos, &origin);
           {
             geometry_msgs::msg::Point left_arrow;
+            // baseline 使用 acos(angle) 作为长度投影分母，而非常见的 cos(angle)。
             Vecf<2> left = pos + arrow_width / acos(angle) *
                                      rotate_vector_2d(normal_vec, angle);
             ConvertVectorToPoint<2>(left, &left_arrow);
@@ -1138,10 +1130,10 @@ class VisualizationUtil {
           }
         }
         p_marker_array->markers.push_back(direction_mk);
-      }  // end if valid
+      }
     }
 
-    // visualize curvature
+    // 第二部分：每 1 m 采样车道中心线，并按绝对曲率映射 Jet 点颜色。
     {
       decimal_t sample_step = 1.0;
       if (behavior.ref_lane.IsValid()) {
@@ -1161,6 +1153,7 @@ class VisualizationUtil {
           curvature_mk.points.push_back(origin);
 
           decimal_t c, cc;
+          // 调用带曲率导数重载，但可视化只使用 c；错误码和 cc 均被忽略。
           behavior.ref_lane.GetCurvatureByArcLength(s, &c, &cc);
           common::ColorARGB color =
               common::GetJetColorByValue(fabs(c), 0.4, 0.0);
@@ -1175,7 +1168,7 @@ class VisualizationUtil {
       }
     }
 
-    // visualize longitudinal behavior
+    // 第三部分：在当前车辆位置上方绘制竖直箭头编码维持/加速/减速。
     {
       if (behavior.ref_lane.IsValid()) {
         common::ColorARGB clr(1.0, 1.0, 0, 0);
@@ -1197,6 +1190,7 @@ class VisualizationUtil {
             break;
           }
           default:
+            // kStopping 等未列举行为保留初始红色和零长度。
             break;
         }
 
@@ -1215,6 +1209,7 @@ class VisualizationUtil {
         pt1.z = pt0.z + length;
         lon_mk.points.push_back(pt0);
         lon_mk.points.push_back(pt1);
+        // points 模式 ARROW 还需要 scale.z 作为箭头头长，但当前未设置。
         lon_mk.scale.x = 0.2;
         lon_mk.scale.y = 0.4;
         FillColorInMarker(clr, &lon_mk);
@@ -1222,8 +1217,9 @@ class VisualizationUtil {
       }
     }
 
-    // forward trajs
+    // 第四部分：为每条周车 rollout 的每个状态绘制圆柱点，并额外连接成折线。
     {
+      // 这里按值复制完整 surround_trajs，轨迹较多时有显著内存开销。
       auto surround_trajs_set = behavior.surround_trajs;
       common::ColorARGB traj_color = cmap.at("sky blue");
       traj_color.a = 0.8;
@@ -1248,6 +1244,7 @@ class VisualizationUtil {
                 &point_marker);
             p_marker_array->markers.push_back(point_marker);
           }
+          // 即使 points 为空也会追加一个空 LINE_STRIP Marker。
           visualization_msgs::msg::Marker line_marker;
           line_marker.header.stamp = rclcpp::Clock(RCL_ROS_TIME).now();
           line_marker.header.frame_id = std::string("map");
@@ -1262,13 +1259,11 @@ class VisualizationUtil {
   }
 
   /**
-   * @brief Convert GridMapND<T, 2> to nav_msgs::msg::OccupancyGrid
-   *
-   * @tparam T Data type
-   * @param GridMapND in type T
-   * @param time_stamp ROS timestamp
-   * @param p_occ_grid Pointer of ROS nav_msgs::msg::OccupancyGrid
-   * @return ErrorType
+   * @brief 把二维 GridMapND 原始数据复制为 ROS OccupancyGrid。
+   * @param grid_map 输入二维规则栅格。
+   * @param time_stamp 输出 header 和 map_load_time。
+   * @param p_occ_grid 输出消息；data 会 resize 后覆盖。
+   * @note 默认假设两维分辨率相同，并直接把 T 转换为 int8 占据值。
    */
   template <typename T>
   static ErrorType GetRosOccupancyGridUsingGripMap2D(
@@ -1276,8 +1271,10 @@ class VisualizationUtil {
       nav_msgs::msg::OccupancyGrid* p_occ_grid) {
     p_occ_grid->header.frame_id = "map";
     p_occ_grid->header.stamp = time_stamp;
+    // GridMapND 第 0 维在内存中最快变化；这里却映射为 height，第 1 维映射为 width。
     p_occ_grid->info.height = grid_map.dims_size(0);
     p_occ_grid->info.width = grid_map.dims_size(1);
+    // 只使用第 0 维分辨率，忽略非等距第二维。
     p_occ_grid->info.resolution = grid_map.dims_resolution(0);
     geometry_msgs::msg::Pose origin;
     Vec3f origin_pose(grid_map.origin()[0], grid_map.origin()[1], 0.0);
@@ -1286,21 +1283,19 @@ class VisualizationUtil {
     p_occ_grid->info.map_load_time = time_stamp;
 
     p_occ_grid->data.resize(grid_map.data_size());
+    // 不执行 ROS OccupancyGrid 约定的 [-1,100] 范围检查或坐标转置。
     std::copy(grid_map.data()->begin(), grid_map.data()->end(),
               p_occ_grid->data.begin());
     return kSuccess;
   }
 
   /**
-   * @brief Get the Ros Marker Cube List Using Grip Map 3 D object
-   *
-   * @tparam T
-   * @param p_grid_map
-   * @param time_stamp
-   * @param frame_id
-   * @param pose
-   * @param p_marker
-   * @return ErrorType
+   * @brief 把三维 GridMapND 中的非零单元追加为 CUBE_LIST 点和固定红色。
+   * @param p_grid_map 输入栅格裸指针。
+   * @param time_stamp Marker 时间戳。
+   * @param frame_id Marker 坐标系。
+   * @param pose `[x,y,yaw]` 形式的 Marker 整体姿态。
+   * @param p_marker 输出 Marker；不清空旧 points/colors。
    */
   template <typename T>
   static ErrorType GetRosMarkerCubeListUsingGripMap3D(
@@ -1313,6 +1308,7 @@ class VisualizationUtil {
     p_marker->action = visualization_msgs::msg::Marker::MODIFY;
     p_marker->id = 0;
 
+    // 整体 pose 的第三分量被解释为 yaw，不是 z 平移。
     geometry_msgs::msg::Pose pose_origin;
     GetRosPoseFrom3DofState(pose, &pose_origin);
     p_marker->pose = pose_origin;
@@ -1324,14 +1320,15 @@ class VisualizationUtil {
     auto origin = p_grid_map->origin();
 
     int ele_num = p_grid_map->data_size();
+    // reserve 只增加容量，不移除 Marker 中已有元素。
     p_marker->points.reserve(ele_num);
     p_marker->colors.reserve(ele_num);
 
     const T* map_ptr = p_grid_map->data_ptr();
-    // int z_max = p_grid_map->dims_size(2);
     std::array<int, 3> idx;
     std::array<decimal_t, 3> p_w;
     for (int i = 0; i < p_grid_map->data_size(); ++i) {
+      // dims_step(2)=size_x*size_y；该条件只遍历首层并额外包含第二层第一个元素。
       if (i > p_grid_map->dims_step(2)) {
         break;
       }
@@ -1344,16 +1341,12 @@ class VisualizationUtil {
       geometry_msgs::msg::Point pt;
       pt.x = p_w[0];
       pt.y = p_w[1];
+      // 仅 z 减去栅格原点，x/y 仍使用全局坐标，局部/全局语义不一致。
       pt.z = p_w[2] - origin[2];
       p_marker->points.push_back(pt);
 
       std_msgs::msg::ColorRGBA clr_ros;
-      // ColorARGB clr = GetJetColorByValue(idx[2], z_max, 0);
-      // clr_ros.a = 0.95;
-      // clr_ros.r = clr.r;
-      // clr_ros.g = clr.g;
-      // clr_ros.b = clr.b;
-
+      // 所有占据单元固定使用半透明红色，不编码高度或数据值。
       clr_ros.a = 0.5;
       clr_ros.r = 1.0;
       clr_ros.g = 0.0;

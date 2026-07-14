@@ -82,7 +82,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.2c5a `core/common` 轨迹线条与通用 Marker 属性工具。
 - [x] M0.2c5b `core/common` Pose、PointCloud 与基础几何 Marker。
 - [x] M0.2c5c `core/common` Mesh、箭头、线条、文本与车辆 Marker。
-- [ ] M0.2c5d `core/common` 障碍物、SemanticBehavior 与 GridMap 可视化。
+- [x] M0.2c5d `core/common` 障碍物、SemanticBehavior 与 GridMap 可视化。
 - [ ] M0.3 语义地图、前向仿真、预测和行为规划。
 - [ ] M0.4 SSC、车辆模型、物理仿真、playground 与配置。
 - [ ] M0.5 全仓覆盖审计和遗漏补齐。
@@ -475,3 +475,23 @@ scale.x，文本/部分线条仍可能带默认全零 orientation，所有容器
 车辆函数每周期计算两条 10 m 转向圆弧和一条横轴后却不发布，形成纯开销；ego=id0
 约定、固定 id 偏移和 `cmap.at("black")` 都依赖上层隐式条件。M1 可删除死计算、统一
 Marker 初始化和资源/样式配置，但不应混入规划算法对照提交。
+
+## 28. M0.2c5d：障碍物、SemanticBehavior 与 GridMap 可视化
+
+- 圆障碍显示为圆柱；普通多边形复制首点闭合为轮廓线，type=1 多边形则把每个顶点
+  显示为交通锥；
+- SemanticBehavior 依次追加参考车道方向短线、曲率渐变、纵向行为竖直箭头，以及
+  周车 rollout 的逐状态圆柱和连接折线；
+- 二维 GridMap 原始数据被复制到 OccupancyGrid；三维 GridMap 的非零单元被转换为
+  CUBE_LIST，单元尺度使用各维分辨率，颜色固定为半透明红色。
+
+已确认的静态问题：空 Polygon 会解引用 `begin()`；圆/多边形 id 在空 namespace 中可
+冲突。语义方向短线使用 `arrow_width/acos(angle)` 而不是常见的 cos 投影，Lane 查询
+错误码均被忽略；停止行为没有显式分支，竖直 ARROW 未设置 scale.z。周车 rollout 被
+完整复制，并为每个状态创建独立 Marker/时间戳，消息数量和开销随候选树快速增长。
+
+二维 OccupancyGrid 把内存最快变化的第 0 维写成 height、第 1 维写成 width，可能与
+ROS row-major 宽度语义转置；只使用第 0 维分辨率，T 到 int8 数据不做 [-1,100] 限制。
+三维接口在 `i>dims_step(2)` 时退出，只画完整 z=0 层和 z=1 的首个体素；点坐标仅 z
+减原点而 x/y 保持全局，又叠加 Marker pose，坐标约定不一致。M0.2c 注释阶段至此完成，
+这些问题进入 M1 可视化/静态修复，不与规划创新实现混合。
