@@ -132,7 +132,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [ ] M0.5a3 EUDM 规划核心。
 - [x] M0.5a3a EUDM 公共类型、接口与状态所有权。
 - [x] M0.5a3b EUDM 配置、动作转换与周期编排。
-- [ ] M0.5a3c EUDM 场景/动作层/积分步前向仿真。
+- [x] M0.5a3c EUDM 场景/动作层/积分步前向仿真。
 - [ ] M0.5a3d EUDM 代价、RSS 与严格安全评价。
 - [ ] M0.5a4 EUDM manager、ROS server 与 visualizer。
 - [ ] M0.5a5 EUDM proto、CMake 与 package 元数据。
@@ -1670,3 +1670,35 @@ potential Lane 缓存从不刷新且函数当前无调用。M1 应引入 ConfigV
 用固定线程池/任务队列和只读共享场景快照，周期开始清空派生缓存，传播精确错误，并为坏路径、
 坏 protobuf、release assert、H=0/1、负候选数、线程创建失败、RSS 查询间歇失败、重复周车 ID、
 大候选实时性以及连续成功/失败周期的结果新鲜度建立测试。
+
+## 70. M0.5a3c：EUDM 场景、动作层与积分步前向仿真
+
+- UpdateSimSetupForScenario 用 ClassifyActionSeq 把脚本分成 always-LK、keep-then-change、
+  always-LC、change-then-cancel，基于当前速度下取整和 M/A/D 调整 IDM 期望速度；加速模式还按
+  aggressive ratio 缩短最小间距与期望时距；
+- UpdateSimSetupForLayer 每层构造 current(LK)、target(当前动作)、longterm(序列最终行为) 三条
+ 参考 Lane/StateTransformer。换道时在目标 Lane 锁定前后 gap ID，并可在层开始用严格 RSS
+ 直接淘汰前/后净距不足的动作；
+- SimulateScenario 逐层调用 SimulateSingleAction，把层末状态滚动到下一层，执行严格碰撞检查，
+  在换道完成时动态改写剩余动作，累计自车/周车轨迹、实际行为、逐层代价和风险 ID；
+- GetSimTimeSteps 将动作时长拆为固定 step 和一个首部余数步。SimulateSingleAction 在每个积分步
+  用同一旧交通快照分别计算自车和全部周车下一状态，随后同步提交，避免顺序更新偏差；
+- 周车只在固定预测 Lane 上用 IDM/运动学传播；自车 LK 使用目标 Lane 前车，LC 使用当前 Lane
+  前车和层初锁定的目标 gap 前后车。后车 RSS 不安全时 evasive 模式可提高自车期望速度/加速度，
+  virtual barrier 可暂缓横移；当前每条动作序列只有一个确定性子场景。
+
+已确认的后续修复/验证点：UpdateSimSetupForScenario 固定读取 action_seq[1]，tree height=1 或短
+脚本会越界；Classify/动作翻译返回值也未全面检查。GetSimTimeSteps 不验证 step 和 action.t，
+step=0 会除零，负值可能转换成巨大 vector，t=0 会得到空轨迹，而 SimulateScenario 随后直接
+back() 崩溃。gap 查询返回值被忽略，gap ID 在整层锁定且不随相对位置/让行意图重选；ID 缺失时
+unordered_map::at 抛异常。周车的 lat_probs/lat_behavior 只被保存，传播始终沿固定 Lane，既不
+执行预测换道，也不响应自车动作；n_sub_threads 固定为 1，SimulateScenario 的 seq_id 未使用，
+没有概率、CVaR、worst-case 或 belief 更新，因此 baseline 本质是单模态确定性交互 rollout。
+CheckIfLateralActionFinished 忽略最近 Lane/拓扑查询错误，并只凭 Lane ID 命中判断完成，没有横向
+偏差、航向误差、车身越线比例或稳定时间，可能提前改写脚本。传播时用 invalid ID 隐藏自身并
+依赖默认 Vehicle 表示“无前车”，相关隐式契约没有类型保护；即时碰撞查询返回码也被忽略。
+每个积分步复制完整 VehicleSet，随后每辆周车都重复 Lane 采样/全车搜索，复杂度随周车数近似
+二次增长；轨迹和上下文还在层/候选间反复深拷贝。M1/创新模块应先补 action/step/gap/ID 契约和
+异常边界，再实现基于行为概率的有限多模态场景树、动态 gap 重选、周车对自车动作的交互响应、
+风险敏感聚合与 beam/pruning，并对 H=1、t=0、负/NaN step、查询失败、车辆缺失、Lane 边界抖动、
+周车换道/让行/抢行、多分支概率校准以及 N=5/10/20/40 的时延扩展性建立测试。
