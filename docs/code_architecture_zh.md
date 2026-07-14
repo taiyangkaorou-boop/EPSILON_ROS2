@@ -108,7 +108,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.3c6g 前后车、交通查询与 LaneNet 距离。
 - [ ] M0.4 SSC、车辆模型、物理仿真、playground 与配置。
 - [x] M0.4a1 车辆模型 PID、IDM/CTX-IDM 速度包装与 Pure Pursuit 控制器。
-- [ ] M0.4a2 IDM 与 Context-IDM 连续模型。
+- [x] M0.4a2 IDM 与 Context-IDM 连续模型。
 - [ ] M0.4a3 VehicleModel 基类与 IdealSteerModel。
 - [ ] M0.4b SSC 地图、规划器、ROS/可视化与配置。
 - [ ] M0.4c 物理仿真器与 arena loader。
@@ -1050,3 +1050,26 @@ IDM/CTX 包装只截断自车/输出速度，不验证前车/目标速度、位�
 仍固定返回成功。Pure Pursuit 不归一化 angle_diff，零/负前视距离仍由 atan2 给出饱和或
 反向几何结果，轴距也可非正。M1 应加入统一 Status/输入契约、PID O(1) 积分与 anti-windup、
 控制限幅和可复现实验参数，并为零速/零前视/异常间距建立边界测试。
+
+## 52. M0.4a2：odeint 纵向车辆模型
+
+- IntelligentDriverModel 的内部数组为 `[s,v,s_front,v_front]`。Step 用 dt 作为积分终点和
+  初始步长调用 odeint，微分算子用 common ACC 公式计算自车加速度，前车保持恒速；积分
+  结果同步回公开 State；
+- 私有 Linear 备用路径使用 IIDM 加速度和显式匀加速公式，但当前 Step 未调用；它会把
+  制动限制为 hard braking 与 `v/dt` 中较小者，并输出两次调试 acc；
+- Context 模型扩展为 `[s,v,s_front,v_front,s_target,v_target]`，先计算
+  `v_ref=v_target+k_s(s_target-s)`，再用 `k_v(v_ref-v)` 得到并截断至 [-1,1] 的跟踪加速度；
+  前车和目标都按恒速运动；
+- Context 算子也调用 common IDM 计算 acc_idm，但 IdmState 未从当前六维状态赋值，且最终
+  `acc=acc_track`，因此当前模型实际上完全忽略前车和 IDM 参数的控制作用。
+
+已确认的后续修复/验证点：Step 不验证 dt>0/有限性，也不暴露 odeint 失败。更关键的是
+odeint 系统函数第三参数是当前积分时间 t，两个 operator 都命名为 dt 并用于 `v/dt` 制动
+限制；在 t=0 处存在除零/NaN 风险，且后续限制随绝对积分时间变化而非数值步长。IDM
+加速度错误码被忽略，状态/参数无物理范围校验，积分可能产生负速或穿越前车；控制包装只
+在最终输出截断，位置已经按异常轨迹推进。Context 的 idm_state 未填充、acc_idm 未使用是
+明确的静态逻辑错误，使类名和接口宣称的跟驰能力不存在。头文件全局 using namespace
+boost::placeholders 还污染包含者命名空间；空析构和重复状态同步没有必要。M1 应修正
+odeint 回调时间语义，用显式步长约束或受控积分器，完整融合 IDM/目标跟踪（含优先级或
+安全屏障），并增加跟驰、急刹、零 dt 和目标追踪的解析边界测试。
