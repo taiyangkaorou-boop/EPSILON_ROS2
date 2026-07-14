@@ -96,7 +96,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.3c1 SemanticMapManager 基础配置类型与 JSON ConfigLoader。
 - [x] M0.3c2 TrafficSignalManager。
 - [x] M0.3c3 DataRenderer。
-- [ ] M0.3c4 ROS adapter。
+- [x] M0.3c4 ROS adapter。
 - [ ] M0.3c5 SemanticMapManager visualizer。
 - [ ] M0.3c6 SemanticMapManager 主类分段审计。
 - [ ] M0.4 SSC、车辆模型、物理仿真、playground 与配置。
@@ -791,3 +791,27 @@ UpdateSignals 会把“尚未开始”的未来信号同过期信号一样永久
 ID 会在其后九帧继续回写，和恢复为无噪声的车辆状态不一致。位置受扰但航向未越阈值的
 车辆又不会标记不确定。M1 应采用 RAII、事务式错误传播、可复用空间索引、带时间戳的
 占据证据衰减，以及显式可复现实验 seed/噪声持续模型。
+
+## 42. M0.3c4：RosAdapter 仿真消息解码与渲染触发
+
+- `RosAdapter` 共享 ROS2 Node、非拥有地引用 SMM，并用裸 new 创建其拥有的 DataRenderer；
+  构造函数立即 Init，订阅相对 topic `arena_info`、`arena_info_static` 和
+  `arena_info_dynamic`，三个 QoS 深度均为 2；
+- 完整消息路径一次解码 LaneNet、VehicleSet、ObstacleSet 和时间戳，立即调用 Render，
+  随后在当前 executor 回调线程同步执行可选地图更新回调；
+- 拆分路径用静态消息缓存 LaneNet/ObstacleSet 并永久置 ready 标记；动态消息更新
+  VehicleSet 和时间戳，只有 ready 后才把最新动态数据与最近静态缓存组合渲染。静态消息
+  自身时间戳不参与组合匹配；
+- 更新回调保存为 `std::function<int(...)>`，但返回值被忽略。析构函数只删除 DataRenderer，
+  SMM 和 Node 仍归外部所有。
+
+已确认的后续修复/验证点：node/SMM/消息指针均不检查；SMM 为空会在 DataRenderer 构造
+阶段立即解引用。类拥有裸指针但未禁止默认复制，复制 RosAdapter 会产生双重 delete 风险。
+Init 既在构造中调用又保持 public，重复调用会重复创建订阅。完整与拆分两套 topic 始终
+同时启用，若仿真器都发布会重复更新；三类回调在 MultiThreadedExecutor 下还会无锁并发
+读写 LaneNet、VehicleSet、ObstacleSet、SMM 和回调函数。所有 Decoder/Render/回调错误码
+被忽略；静态解码失败也会置 ready，动态消息可能使用空或旧缓存。拆分数据没有时间戳、
+序号或 frame 一致性检查，静态更新与动态帧可能跨场景组合；完整路径与拆分路径也共享
+同一缓存。空回调可被标记为已绑定，回调执行时间直接阻塞订阅处理。M1 应采用 unique_ptr、
+不可复制语义、显式输入模式、callback group/锁或消息快照，以及带时间同步和错误状态的
+单一渲染触发入口。
