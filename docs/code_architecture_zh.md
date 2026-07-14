@@ -74,7 +74,11 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.2b2c2 `core/common` 带参考接近项的 Bezier corridor QP。
 - [x] M0.2b2c3 `core/common` 基础 Bezier corridor QP。
 - [x] M0.2b3 `core/common` 轨迹抽象、Frenet Bezier 与 FrenetPrimitive 包装。
-- [ ] M0.2c `core/common` 求解器、安全模型、车辆行为模型与可视化。
+- [x] M0.2c1 `core/common` 加权最小二乘 QP 与 OOQP/MA27 接口。
+- [ ] M0.2c2 `core/common` RSS 安全检查模型。
+- [ ] M0.2c3 `core/common` IDM 与 MOBIL 行为模型。
+- [ ] M0.2c4 `core/common` FrenetPrimitive。
+- [ ] M0.2c5 `core/common` 可视化工具。
 - [ ] M0.3 语义地图、前向仿真、预测和行为规划。
 - [ ] M0.4 SSC、车辆模型、物理仿真、playground 与配置。
 - [ ] M0.5 全仓覆盖审计和遗漏补齐。
@@ -324,3 +328,20 @@ SSC map adapter 明确填充，不能因为障碍物本身没有时间字段就�
 `kEPS` 的左边界外查询也有同一问题。Bezier 的 `variables()` 固定为空、setter 无操作、
 `Jerk()` 不写输出，属于静默未实现接口。Primitive setter 仅用 assert 检查 12 维长度，
 release 下短输入会越界，且改系数不更新有效标记或端状态。以上属于 M1 的高优先级修复。
+
+## 20. M0.2c1：加权最小二乘 QP 与 OOQP 接口
+
+- `QuadraticProblem` 将 `(Ax-b)'S(Ax-b)+x'Wx` 展开后，以正比例缩放的标准形式传给
+  OOQP；完整入口支持等式、双边线性不等式和变量界，简化入口构造零行不等式与无穷界；
+- `OoQpItf` 复制可能被 OOQP 修改的输入，提取 Q 下三角并压缩 Eigen 稀疏矩阵，再把
+  CSR 数组交给 `QpGenSparseMa27` 和 Gondzio 内点求解器；
+- `generateLimits` 把 `+/-double_max` 识别为未启用边界，其他有限界均传入 OOQP；
+- 输出 x 在求解前清零，只在成功终止或调用方明确允许 UNKNOWN 时复制当前迭代解。
+
+已确认的后续修复/验证点：接口不验证 Q 方阵、对称、半正定和有限性，只取下三角；
+除少数 assert 外，A/b、C/d/f、变量界与列数一致性、`lower<=upper` 均未系统检查。
+零等式或零不等式场景仍对空 Eigen 向量调用 `coeffRef(0)`，debug 会断言，release 属于
+未定义行为；这正是等式-only 重载的正常输入。corridor 调用设置
+`ignoreUnknownError=true`，会把未确认收敛的 UNKNOWN 迭代点当成功，且返回前不复核
+等式/不等式残差。W 经稠密矩阵再转稀疏，打印也会稠密化大矩阵；裸 `new/delete` 在
+异常路径不具备 RAII。M1 应先加维度/残差检查、零约束安全指针和严格状态策略。

@@ -11,9 +11,11 @@
 
 namespace common {
 
+// 本实现沿用 OOQP C++ 接口命名，局部直接使用 Eigen 与标准库符号。
 using namespace Eigen;
 using namespace std;
 
+// 将 Eigen 稀疏 QP 数据转换为 OOQP QpGenSparseMa27，求解后再复制主变量 x。
 bool OoQpItf::solve(const Eigen::SparseMatrix<double, Eigen::RowMajor>& Q,
                     const Eigen::VectorXd& c,
                     const Eigen::SparseMatrix<double, Eigen::RowMajor>& A,
@@ -23,19 +25,17 @@ bool OoQpItf::solve(const Eigen::SparseMatrix<double, Eigen::RowMajor>& Q,
                     const Eigen::VectorXd& l, const Eigen::VectorXd& u,
                     Eigen::VectorXd& x, const bool ignoreUnknownError,
                     const bool verbose) {
-  int nx = Q.rows();  // nx is the number of primal variables (x).
-  // OOQPEI_ASSERT_GT(range_error, nx, 0, "Matrix Q has size 0.");
+  // 主变量数量由 Q 的行数决定；baseline 未验证 Q 为非空方阵或 c/l/u 维度一致。
+  int nx = Q.rows();
   x.setZero(nx);
 
-  // Make copies of variables that are changed.
+  // OOQP 接口可能修改输入缓存，因此复制线性项和约束数据。
   auto ccopy(c);
   auto Acopy(A);
   auto bcopy(b);
   auto Ccopy(C);
 
-  // Make sure Q is in lower triangular form (Q is symmetric).
-  // Refer to OOQP user guide section 2.2 (p. 11).
-  // TODO Check if Q is really symmetric.
+  // OOQP 只接收对称矩阵下三角；当前不验证原 Q 的对称性，所有上三角独有信息会丢失。
   SparseMatrix<double, Eigen::RowMajor> Q_triangular =
       Q.triangularView<Lower>();
 
@@ -44,15 +44,15 @@ bool OoQpItf::solve(const Eigen::SparseMatrix<double, Eigen::RowMajor>& Q,
                             u);
   }
 
-  // Compress sparse Eigen matrices (refer to Eigen Sparse Matrix user manual).
+  // OOQP 需要 CSR 风格连续数组，先压缩所有稀疏矩阵。
   Q_triangular.makeCompressed();
   Acopy.makeCompressed();
   Ccopy.makeCompressed();
 
+  // 这里只检查不等式行数，其他矩阵/向量维度依赖调用方保证。
   assert(Ccopy.rows() == d.size());
   assert(Ccopy.rows() == f.size());
-  // Determine which limits are active and which are not.
-  // Refer to OOQP user guide section 2.2 (p. 10).
+  // 将 +/-double_max 哨兵转换为 OOQP 的上下界启用标志。
   Matrix<char, Eigen::Dynamic, 1> useLowerLimitForX;
   Matrix<char, Eigen::Dynamic, 1> useUpperLimitForX;
   VectorXd lowerLimitForX;
@@ -81,10 +81,7 @@ bool OoQpItf::solve(const Eigen::SparseMatrix<double, Eigen::RowMajor>& Q,
                 upperLimitForInequalityConstraints);
   }
 
-  // Setting up OOQP solver
-  // Refer to OOQP user guide section 2.3 (p. 14).
-
-  // Initialize new problem formulation.
+  // 根据问题维数和非零元数量初始化 MA27 稀疏 QP 工厂。
   int my = bcopy.size();
   int mz = lowerLimitForInequalityConstraints.size();
   int nnzQ = Q_triangular.nonZeros();
@@ -92,7 +89,7 @@ bool OoQpItf::solve(const Eigen::SparseMatrix<double, Eigen::RowMajor>& Q,
   int nnzC = Ccopy.nonZeros();
 
   QpGenSparseMa27* qp = new QpGenSparseMa27(nx, my, mz, nnzQ, nnzA, nnzC);
-  // Fill in problem data.
+  // 暴露 Eigen 内部连续数组给 OOQP。零长度向量仍调用 coeffRef(0)，是既有未定义行为。
   double* cp = &ccopy.coeffRef(0);
   int* krowQ = Q_triangular.outerIndexPtr();
   int* jcolQ = Q_triangular.innerIndexPtr();
@@ -113,28 +110,24 @@ bool OoQpItf::solve(const Eigen::SparseMatrix<double, Eigen::RowMajor>& Q,
   double* cupp = &upperLimitForInequalityConstraints.coeffRef(0);
   char* icupp = &useUpperLimitForInequalityConstraints.coeffRef(0);
 
+  // makeData 不接管上述 Eigen 缓存所有权，缓存必须存活到求解结束。
   QpGenData* prob = (QpGenData*)qp->makeData(
       cp, krowQ, jcolQ, dQ, xlow, ixlow, xupp, ixupp, krowA, jcolA, dA, bA,
       krowC, jcolC, dC, clow, iclow, cupp, icupp);
 
-  // Create object to store problem variables.
+  // 分别创建主/对偶变量、残差和 Gondzio 内点求解器。
   QpGenVars* vars = (QpGenVars*)qp->makeVariables(prob);
-  //  if (isInDebugMode()) prob->print(); // Matrices are printed as [index_x,
-  //  index_y, value]
-
-  // Create object to store problem residual data.
   QpGenResiduals* resid = (QpGenResiduals*)qp->makeResiduals(prob);
-
-  // Create solver object.
   GondzioSolver* s = new GondzioSolver(qp, prob);
 
   if (verbose) {
     s->monitorSelf();
   }
 
-  // Solve.
+  // 求解并取得 OOQP 状态码。
   int status = s->solve(prob, vars, resid);
 
+  // corridor 调用会允许 UNKNOWN，并把当时的迭代解复制为正式输出。
   if ((status == SUCCESSFUL_TERMINATION) ||
       (ignoreUnknownError && (status == UNKNOWN)))
     vars->x->copyIntoArray(&x.coeffRef(0));
@@ -142,8 +135,7 @@ bool OoQpItf::solve(const Eigen::SparseMatrix<double, Eigen::RowMajor>& Q,
   if (verbose) {
     printSolution(status, x);
   }
-  // vars->x->writefToStream( cout, "x[%{index}] = %{value}" );
-
+  // 依创建依赖的反序手工释放；若中途抛异常，这些裸指针不会自动清理。
   delete s;
   delete resid;
   delete vars;
@@ -154,6 +146,7 @@ bool OoQpItf::solve(const Eigen::SparseMatrix<double, Eigen::RowMajor>& Q,
           (ignoreUnknownError && (status == UNKNOWN)));
 }
 
+// 把极值哨兵界转为 OOQP 的启用标志；普通有限界保持原值并默认启用。
 void OoQpItf::generateLimits(
     const Eigen::VectorXd& l, const Eigen::VectorXd& u,
     Eigen::Matrix<char, Eigen::Dynamic, 1>& useLowerLimit,
@@ -166,11 +159,13 @@ void OoQpItf::generateLimits(
   upperLimit = u;
 
   for (int i = 0; i < n; i++) {
+    // 纯相对比较用于识别调用方传入的 -double_max 无界哨兵。
     if (NumericalUtil::ApproximatelyEqual(
             l(i), -std::numeric_limits<double>::max())) {
       useLowerLimit(i) = 0;
       lowerLimit(i) = 0.0;
     }
+    // 正 double_max 同理表示不启用上界。
     if (NumericalUtil::ApproximatelyEqual(u(i),
                                           std::numeric_limits<double>::max())) {
       useUpperLimit(i) = 0;
@@ -179,6 +174,7 @@ void OoQpItf::generateLimits(
   }
 }
 
+// 将稀疏矩阵转为稠密文本打印，问题较大时会产生显著内存和日志开销。
 void OoQpItf::printProblemFormulation(
     const Eigen::SparseMatrix<double, Eigen::RowMajor>& Q,
     const Eigen::VectorXd& c,
@@ -203,6 +199,7 @@ void OoQpItf::printProblemFormulation(
   cout << "u << " << u.transpose() << endl;
 }
 
+// 打印每个分量是否启用上下界以及相应数值。
 void OoQpItf::printLimits(
     const Eigen::Matrix<char, Eigen::Dynamic, 1>& useLowerLimit,
     const Eigen::Matrix<char, Eigen::Dynamic, 1>& useUpperLimit,
@@ -215,6 +212,7 @@ void OoQpItf::printLimits(
   cout << "upperLimit << " << upperLimit.transpose() << endl;
 }
 
+// status==0 按成功格式打印；其他状态只输出错误码，不解释具体 OOQP 枚举。
 void OoQpItf::printSolution(const int status, const Eigen::VectorXd& x) {
   if (status == 0) {
     cout << "-------------------------------" << endl;
