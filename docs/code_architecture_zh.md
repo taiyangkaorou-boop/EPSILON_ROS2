@@ -68,7 +68,9 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.2a4a `core/common` State/FreeState/FrenetState/Waypoint/StateTransformer。
 - [x] M0.2a4b `core/common` Lane 与 LaneGenerator。
 - [x] M0.2b1 `core/common` 数学基础与圆弧运动基元。
-- [ ] M0.2b2 `core/common` 多项式、样条与查找表。
+- [x] M0.2b2a `core/common` 多项式、基础样条与边界逆矩阵查找表。
+- [ ] M0.2b2b `core/common` Bezier 曲线与分段 Bezier 样条。
+- [ ] M0.2b2c `core/common` SplineGenerator 生成与优化入口。
 - [ ] M0.2b3 `core/common` 轨迹表示与生成。
 - [ ] M0.2c `core/common` 求解器、安全模型、车辆行为模型与可视化。
 - [ ] M0.3 语义地图、前向仿真、预测和行为规划。
@@ -218,3 +220,20 @@ SSC map adapter 明确填充，不能因为障碍物本身没有时间字段就�
 否则可能无限循环，并且默认不包含末点。`CircleArcBranch` 又固定使用正 0.2 m 步长，
 因此负弧长候选会触发该风险；其默认构造只有声明没有定义，输出均为追加语义。以上
 问题留待 M1 独立修复和回归验证。
+
+## 14. M0.2b2a：多项式、基础样条与边界映射缓存
+
+- `Polynomial<N_DEG>` 以“最高阶在前、系数乘以对应阶乘”的形式保存主系数，并维护
+  一份常数项在前的普通幂基缓存；前者便于导数求值，后者用于更快的零阶 Horner 求值；
+- 五次 jerk-optimal 连接通过 6x6 逆矩阵把两端位置、速度、加速度映射为系数，常用
+  3.0--5.0 s 时长可按浮点键精确命中全局预计算表；
+- `PolynomialND` 只把多个独立一维多项式组合成向量输出，不表达维度间耦合；
+- `Spline` 以全局断点选择分段，再将全局参数转换为段内局部参数；内部断点精确命中
+  时使用左段，域外查询使用首/末段外推且仍返回成功；段间连续性完全由生成器保证。
+
+已确认的后续修复/验证点：多项式导数阶数、输出指针和数组负下标未验证，平方导数积分
+公式只适合五次系数布局。`GetJerkOptimalConnection` 在 `S<kEPS` 分支写入主系数后未
+调用 `update()`，导致零阶快速求值可能读取旧缓存，而带导数重载读取新主系数；负时长
+也进入同一退化分支。`GetAInverse(0)` 会对奇异矩阵求逆，全局缓存可被外部修改且只按
+浮点精确值命中。`Spline` 不检查断点严格递增，空域检查不足以保护单断点/零分段异常
+对象，域外外推无法从返回码辨别，调试 `print()` 又固定为二维。以上留待 M1 修复。
