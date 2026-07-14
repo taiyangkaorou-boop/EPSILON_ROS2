@@ -116,10 +116,10 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.4b3 SSC 轨迹规划与优化主流程。
 - [x] M0.4b4 SSC ROS2 服务端与可视化。
 - [x] M0.4b5 SSC proto、配置、RViz 与构建元数据。
-- [ ] M0.4c 物理仿真器与 arena loader。
+- [x] M0.4c 物理仿真器与 arena loader。
 - [x] M0.4c1 场景基础依赖与 ArenaLoader。
 - [x] M0.4c2 PhySimulation 状态推进与临时障碍物。
-- [ ] M0.4c3 ROS2 adapter、visualizer 与仿真节点。
+- [x] M0.4c3 ROS2 adapter、visualizer 与仿真节点。
 - [ ] M0.4d playground、集成入口、launch 与构建配置。
 - [ ] M0.5 全仓覆盖审计和遗漏补齐。
 
@@ -1362,3 +1362,40 @@ ID 集合相等，`.at(id)` 可抛异常；model find 不检查 end 就解引用
 校验 signal ID/dt/state/control 并加入碰撞/边界与时间推进。临时障碍应使用不冲突 ID 分配器、
 句柄式增删和几何校验，并覆盖默认构造、重复 setup、错配 ID、缺模型、零 dt、openloop 跳变、
 静态 ID 冲突、计数溢出及批量删除测试。
+
+## 61. M0.4c3：物理仿真 ROS2 真值、Marker 与多频率主循环
+
+- RosAdapter 借用 PhySimulation，创建相对 topic `arena_info`、`arena_info_static`、
+  `arena_info_dynamic`。Encoder 分别把 LaneNet+VehicleSet+ObstacleSet、LaneNet+ObstacleSet、
+  VehicleSet 编成 map frame 的完整/静态/动态 ArenaInfo，publisher 深度均为 10；
+- Visualizer 使用固定绝对 topic 发布 VehicleSet、LaneNet 和 ObstacleSet。车辆由公共工具显示
+  OBB/速度/转向；每条 Lane 显示中心线、首尾球和起点上方 ID 文本；障碍物统一转 Polygon
+  MarkerArray。VisualizeData 使用 node 当前时钟，带 stamp 版本每帧按值取得三类仿真数据；
+- planning node 固定以 500 Hz、dt=0.002 s 调用仿真更新；每辆车订阅
+  `/ctrl/agent_<vehicle_id>` 并保存最新信号，启动前为全部车辆建立零控制。动态真值 100 Hz、
+  静态真值 10 Hz、可视化 20 Hz，均以独立 next publish time 调度；
+- `/initialpose` 与 `/move_base_simple/goal` 回调只解析并缓存 x/y/yaw 及接收标志。场景三路径
+  作为 ROS 参数读取，launch 正常覆盖源码中的开发机绝对默认值。
+
+已确认的后续修复/验证点：RosAdapter/Visualizer 默认构造不初始化 node、publishers 或
+p_phy_sim_，参数构造也不初始化借用指针；所有发布函数直接解引用且不检查 Encoder 返回码。
+仿真 getter 每次深拷贝完整地图/车辆。完整 ArenaInfo publisher 在当前 node 中从未调用。
+frame 固定 map，QoS/可靠性/瞬态策略不可配置。Visualizer::SendTfWithStamp 只有声明没有定义，
+一旦恢复调用会链接失败；当前 TF 调用被注释。可视化绝对 topic 绑定固定节点名，阻碍 namespace
+和多实例；Marker ID 依赖 unordered_map 遍历或 7*vehicle_id，无稳定排序、旧 Marker 删除和
+负/大 ID 防护。Lane 可视化再次无条件解引用空 lane_points；color_obb 未使用。
+node 使用全局可变 signal set/subscription/state，当前单线程 spin_some 尚无数据竞争，但迁移
+多线程 executor 会失效。Ctrl callback 用 operator[] 接受未知 ID，没有消息时间戳、新鲜度、
+控制超时或有限性检查；丢失控制会永久保持上次值。initialpose/goal 的缓存和 flag 永远不被
+读取。参数获取失败后仍以空路径继续；源码绝对默认路径不可移植，也无顶层异常处理。
+固定 dt 不使用真实墙钟/ROS 时间差，负载抖动会使仿真时间与消息时间漂移；仿真 State 自身又
+不推进时间戳。rclcpp::Rate 与 node clock/use_sim_time 语义未统一。输出调度一次只增加一个
+period，严重延迟后会连续多轮追赶；静态大地图仍固定 10 Hz 重复发布。500 Hz 循环每次
+spin_some 可能被回调负载拖慢，所有 Update/Publish 返回状态被忽略。M1 应引入有所有权/非空
+契约的 adapter，补 SendTf 或删除接口，使用参数化 topic/frame/QoS 和稳定 Marker lifecycle；
+主循环需基于统一时钟推进、检测控制 freshness/未知 ID、传播失败并让初始/目标输入具有明确
+业务语义，同时覆盖未绑定发布、TF 链接、空 Lane、多实例 topic、控制超时、未知 ID、sim time
+暂停/跳变和循环超时测试。
+
+至此 M0.4c 已完成：从场景 JSON/GeoJSON、车辆模型推进、临时障碍物，到 ROS2 真值和 Marker
+发布的物理仿真职责链已经建立中文索引；逻辑与构建缺陷留待 M1 集中修复。
