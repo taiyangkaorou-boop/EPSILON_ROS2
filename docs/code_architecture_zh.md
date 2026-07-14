@@ -122,7 +122,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.4c3 ROS2 adapter、visualizer 与仿真节点。
 - [ ] M0.4d playground、集成入口、launch 与构建配置。
 - [x] M0.4d1 物理仿真 GeoJSON 工具与 ROS1/ROS2 launch。
-- [ ] M0.4d2 物理仿真 CMake、package.xml 与 RViz 资源。
+- [x] M0.4d2 物理仿真 CMake、package.xml 与 RViz 资源。
 - [ ] M0.4d3 playground 场景资源与包元数据。
 - [ ] M0.4d4 planning_integrated 集成入口与剩余构建/launch 审计。
 - [ ] M0.5 全仓覆盖审计和遗漏补齐。
@@ -1433,3 +1433,36 @@ ROS2 仿真 launch 无条件要求 phy_simulator/playgrounds 已正确安装资�
 支持完整 GeoJSON geometry、确定性无头验证图和原子输出，并生成 manifest/hash；ROS2 launch
 应提供 joystick 条件、设备/频率/use_sim_time/topic 参数和资源存在性检查，ROS1 文件则迁移
 到明确 legacy 目录或删除，并覆盖缺场景、无 origin、多 polygon、headless 和无 joystick 测试。
+
+## 63. M0.4d2：物理仿真构建、安装与综合 RViz 面板
+
+- CMake 使用 C++17/Release/`-O3 -Wall`，查找 ament、rclcpp、visualization/sensor/geometry
+  messages、Eigen3、common、vehicle_model 和 vehicle_msgs；
+- `phy_simulator_lib` 编译 ArenaLoader/PhySimulation 并链接 dw、common、vehicle_model；
+  `phy_simulator_planning_node` 额外编译 main、Visualizer、RosAdapter，链接算法库和消息依赖；
+- 库与节点分别安装到 lib 和 `lib/phy_simulator`，公开 include 树与 launch 目录安装到标准
+  include/share 路径；ament 导出算法库名、依赖及头路径；
+- RViz 使用 map Fixed Frame，启用物理仿真 ObstacleSet/LaneSet，VehicleSet 默认关闭；同时
+  集成 agent_0 的语义地图、行为、SSC 执行轨迹、RSS/关键轨迹等面板，以及默认关闭的 agent_9
+  debug 组。当前视角是跟随 `ego_vehicle_vis_0` 的 ThirdPersonFollower，TF display 默认关闭；
+- package.xml 目前只声明 rclcpp/rclpy、vehicle_msgs、common、vehicle_model 和 ros2launch，
+  版本/描述/maintainer/license 保持 baseline 占位值。RViz 是工具生成资源，本阶段保持原样。
+
+已确认的后续修复/验证点：CMake 强制 Release 和全局优化/警告，覆盖用户构建类型；使用全局
+include/link 而非 target-based ament_target_dependencies。`${semantics_msgs_INCLUDE_DIRS}` 没有
+find_package，nlohmann json 和 backward/dw 也没有显式发现；Linux 专用 dw 阻碍非 Linux 构建。
+ROS2 节点直接使用 visualization_msgs、geometry_msgs、sensor_msgs、rclcpp、vehicle_msgs，
+却主要依赖传递链接。install 声明 `EXPORT export_phy_simulator`，但没有 ament_export_targets，
+该 export set 对下游无效；只导出 phy_simulator_lib，不导出命名空间 target。公开 include 树
+包含 ROS adapter/visualizer 头，因此下游还需要 manifest 未完整声明的 ROS 依赖。
+package.xml 漏掉 visualization_msgs、sensor_msgs、geometry_msgs、Eigen3、tf2_ros，以及 launch
+文件运行时需要的 launch、launch_ros、ament_index_python、joy 和 playgrounds；反而声明未用
+rclpy。版本 0.0.0、TODO license/邮箱不满足正式发布要求。CMake 不安装 rviz 和 tools，用户从
+install space 无法加载综合面板或复用 GeoJSON 工具。
+RViz 资源混合物理仿真、agent_0 规划和 agent_9 debug，topic/agent ID 固定，无法按 ego_id 或
+namespace 参数化；AgentDebug 名称与 agent_9 topic 不一致，关键轨迹 topic 还拼成 `critial`。
+VehicleSet/TF/Grid 默认关闭，当前 Visualizer 又不发布 TF，ThirdPersonFollower target 可能缺失。
+配置包含重复 Help 面板、机器特定窗口几何/QMainWindowState 和大量与 phy_simulator 包本身无关
+的规划显示。M1 应采用现代 target/export/install 规则、补全 manifest 和平台条件链接，安装
+RViz/tools；把综合面板拆为可参数化的 simulator 与 planning 两套配置，并增加 install-space
+find_package/link、ament lint、manifest dependency、RViz topic 存在性和多 agent namespace 检查。

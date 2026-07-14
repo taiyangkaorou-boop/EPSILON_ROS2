@@ -6,18 +6,18 @@
   <maintainer email="wdingae@todo.com">HKUST_UAV_GROUP</maintainer>
   <license>TODO</license>
 
-  <!-- Build dependencies -->
+  <!-- 标准 ament_cmake 构建工具。 -->
   <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <!-- Package dependencies -->
+  <!-- 当前 manifest 显式声明的运行/编译依赖。 -->
   <depend>rclcpp</depend>
-  <depend>rclpy</depend> <!-- Replacing rospy for ROS 2 -->
+  <depend>rclpy</depend>
   <depend>vehicle_msgs</depend>
   <depend>common</depend>
   <depend>vehicle_model</depend>
   <exec_depend>ros2launch</exec_depend>
 
-  <!-- Export dependencies -->
+  <!-- 声明标准 ament_cmake 构建类型。 -->
   <export>
     <build_type>ament_cmake</build_type>
   </export>
