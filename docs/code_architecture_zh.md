@@ -134,10 +134,10 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.5a3b EUDM 配置、动作转换与周期编排。
 - [x] M0.5a3c EUDM 场景/动作层/积分步前向仿真。
 - [x] M0.5a3d EUDM 代价、RSS 与严格安全评价。
-- [ ] M0.5a4 EUDM manager、ROS server 与 visualizer。
+- [x] M0.5a4 EUDM manager、ROS server 与 visualizer。
 - [x] M0.5a4a EUDM manager 公共状态、快照与所有权。
 - [x] M0.5a4b EUDM manager 动作续接、HMI 状态机与重选实现。
-- [ ] M0.5a4c EUDM ROS2 server 与 visualizer。
+- [x] M0.5a4c EUDM ROS2 server 与 visualizer。
 - [ ] M0.5a5 EUDM proto、CMake 与 package 元数据。
 - [ ] M0.5b ai_agent planner 与 launch/build。
 - [ ] M0.5c route_planner、vehicle_msgs 与公共 Planner 接口遗漏。
@@ -1801,3 +1801,39 @@ Run 任一阶段失败都保留上一 last_snapshot/context，若上层忽略返
 variant/状态转移表，恢复并重写安全触发判定，统一新鲜度 epoch 和 fail-closed 输出，建立曲率限速
 数值守卫、快照边界验证和 full Reset；测试覆盖 H=1/2/3、零 layer/work rate、null map、模式切换、
 拨杆抖动/相反信号、提案与重选分歧、长 Lane 分叉、NaN 曲率、空候选和各阶段连续失败。
+
+## 74. M0.5a4c：EUDM ROS2 server 与候选轨迹可视化
+
+- EudmPlannerServer 构造时创建 EudmManagerVisualizer 和容量 100 的 ReaderWriterQueue；地图
+  生产者 PushSemanticMap，独立线程按 work_rate 清空队列并只保留最新 SemanticMapManager；
+- Init 初始化 manager，订阅 `/joy`，读取 use_sim_state 并创建 `/vis/agent_<id>/forward_trajs`
+  publisher；Joy 用 frame_id 选择 ego，buttons 0..6 分别控制减速、右换、左换、加速、左右禁换和
+  自动控制，拨杆再次按下会切回 0；
+- PlanCycleCallback 复制最新地图，按重规划周期向下量化时间戳，manager 成功时写入新 ego behavior，
+  随后调用下游回调并发布可视化；下游 integrated app 把更新地图继续送给 SSC；
+- Visualizer 从 planner 按值读取全部自车候选，每个状态生成圆柱、每条轨迹生成 LineStrip；processed
+  winner 为金色、不同的 original winner 为绿色、其余为半透明灰色，Marker 统一使用 map frame，
+  并根据上一帧数量发送删除 Marker。
+
+已确认的后续修复/验证点：Start 创建 detached thread 且类没有 stop/join/析构协议，多次 Start 会
+生成多个线程，对象提前销毁会 use-after-free；is_under_ctrl 在启动线程后才写，首周期存在竞态。
+Joy/外部 setter 在 ROS executor 线程写 task_，规划线程无锁读取，构成 C++ data race；callback 绑定
+状态也无同步。Task::user_desired_vel 在 server 构造中仍未初始化，当前 integrated app 恰好在 Start
+前 setter，但独立使用可读未定义值。Joy 未检查 msg/null、buttons 长度，frame_id 的 stoi 可抛异常；
+按键按电平而非边沿/去抖处理，持续按住会反复切换，组合键按 else-if 固定优先级。ReaderWriterQueue
+是 SPSC 结构但公开 API 未约束单生产者，try_enqueue 失败被静默丢帧；地图入队、smm_、shared_ptr
+至少三次大对象复制。work_rate<=0 会除零，>1000 Hz 的整数毫秒 interval 可能为 0；system_clock
+受时间校准影响，规划超时后无 skip/deadline 统计而立即追赶。`use_sim_state` 未在本类 declare，且
+visualizer 只缓存不使用；GetCorrespondingActionInActionSequence 和 Replan 只有声明没有定义。
+manager 失败时仍调用下游 callback 和 PublishData：smm_ 保留输入中的旧 behavior，而 planner 可能
+已有部分新容器、manager winner ID 仍属旧快照，形成 fail-open/混代可视化；callback 返回值被忽略，
+异常会终止 detached 线程。Visualizer 构造只用 release 下失效的 assert 检查 manager，未检查 node、
+publisher、快照 valid 或 winner 初始化；每帧再次深拷贝全部轨迹，use_sim_state_ 和多个 include 未用，
+header guard 仍命名 ROS_ADAPTER。M1 应改为 jthread/stop_token 或 ROS wall timer，使用 steady_clock、
+显式 deadline/drop 指标；Task 用 mutex/原子快照或队列传递，Joy 做长度/解析/边沿校验；规划结果携带
+epoch+success 并仅在成功时原子发布，失败显式清行为/Marker；队列限定单生产者或换 MPMC，并测试
+Start/Stop/重复启动、对象销毁、0/高频率、队列满、多生产者、Joy 短消息/坏 ID/长按、回调异常、
+连续规划失败和 planner/manager 快照代际一致性。
+
+至此 M0.5a4 已完成：EUDM manager 的跨周期/HMI 状态机以及 ROS2 输入、线程、回调和可视化边界均已
+建立中文职责与静态风险索引。下一阶段 M0.5a5 审计 protobuf 配置、CMake 和 package 元数据。
