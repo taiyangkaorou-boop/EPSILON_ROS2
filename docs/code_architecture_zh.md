@@ -70,7 +70,9 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.2b1 `core/common` 数学基础与圆弧运动基元。
 - [x] M0.2b2a `core/common` 多项式、基础样条与边界逆矩阵查找表。
 - [x] M0.2b2b `core/common` Bezier 曲线与分段 Bezier 样条。
-- [ ] M0.2b2c `core/common` SplineGenerator 生成与优化入口。
+- [x] M0.2b2c1 `core/common` SplineGenerator 插值、拟合与状态连接。
+- [ ] M0.2b2c2 `core/common` 带参考接近项的 Bezier corridor QP。
+- [ ] M0.2b2c3 `core/common` 基础 Bezier corridor QP。
 - [ ] M0.2b3 `core/common` 轨迹表示与生成。
 - [ ] M0.2c `core/common` 求解器、安全模型、车辆行为模型与可视化。
 - [ ] M0.3 语义地图、前向仿真、预测和行为规划。
@@ -254,3 +256,20 @@ SSC map adapter 明确填充，不能因为障碍物本身没有时间字段就�
 运行时验证。五次基函数收到 0--3 以外导数阶数时直接返回未初始化向量，其他次数和
 不支持的 Hessian 在关闭 assert 后同样可能返回未初始化矩阵。左右越界契约不对称，
 输出指针也未检查。以上在 M1 中通过自包含编译检查和数值单元测试修复。
+
+## 16. M0.2b2c1：样本插值、正则拟合与状态边界连接
+
+- `SplineGenerator` 的实现位于 `.cc`，只显式实例化 `<5,2>` 和 `<5,1>`；当前通用
+  模板外观不代表任意阶数/维数都具备可链接实现；
+- 三次插值对各维独立调用 `tk::spline`，相邻参数差超过 7 m 时先在原样本连线上加密，
+  再把普通三次系数转换为项目的阶乘缩放五次容器；
+- 五次拟合构造单位样本权重的最小二乘项，对每段最高三个系数施加递减正则，并通过
+  等式约束保证相邻段的位置、速度、加速度和 jerk 连续；
+- Waypoint 转换会覆盖输出，只固定位置并写入参数戳；State/FreeState 转换对每个相邻
+  状态段的 x/y 独立构造两端二阶边界五次连接，更高维度统一置零。
+
+已确认的后续修复/验证点：插值只检查样本/参数数量，不检查参数有限、严格递增或输出
+指针；线性加密会改变原始中心线形状假设。五次拟合没有检查 `samples.size()==para.size()`、
+参数/断点排序和覆盖关系、正分段时长、非负正则或输出指针；共享断点样本归入左段，
+最后断点外样本可能形成未填充的观测行。State 两个入口仅用 assert 检查数量一致，release
+构建中不安全，且非递增参数会触发 `Polynomial` 的近零/负时长退化与缓存不同步问题。

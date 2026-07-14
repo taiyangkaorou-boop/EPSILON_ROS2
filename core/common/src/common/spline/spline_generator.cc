@@ -4,13 +4,12 @@
 
 namespace common {
 
+// 使用 tk::spline 对各输出维独立执行自然三次插值，再封装为项目统一样条表示。
 template <int N_DEG, int N_DIM>
 ErrorType SplineGenerator<N_DEG, N_DIM>::GetCubicSplineBySampleInterpolation(
     const vec_Vecf<N_DIM>& samples, const std::vector<decimal_t>& para,
     SplineType* spline) {
   if (samples.size() < 3) {
-    // printf("[SampleInterpolation]input sample size: %d.\n",
-    //        static_cast<int>(samples.size()));
     return kWrongStatus;
   }
   if (samples.size() != para.size()) return kIllegalInput;
@@ -22,13 +21,8 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetCubicSplineBySampleInterpolation(
   }
 
   SplineType cubic_spline;
-  // interpolate parameterization if too sparse
-  // NOTE: the issue is caused by GetArcLengthByVecPosition
-  // the current implementation is a fast version and reduces
-  // the evaluation of spline as much as possible, but suffers
-  // from the local minimum issue. To avoid the local minimum in practice
-  // it is recommended to have a relatively dense parameterization
-  // e.g, delta para < 3.5 * 2 = 7.0 m
+  // 若相邻参数间隔过大，则在原样本连线上补点，使每段参数间隔严格小于约 7 m。
+  // 该经验阈值服务于 Lane 的有限粗搜索投影，降低过稀参数化落入局部极小的概率。
   const decimal_t para_delta_threshold = 7.0;
   int num_samples = static_cast<int>(samples.size());
   vec_Vecf<N_DIM> interpolated_samples{samples[0]};
@@ -37,6 +31,7 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetCubicSplineBySampleInterpolation(
   for (int i = 1; i < num_samples; i++) {
     decimal_t dis = para[i] - para[i - 1];
     if (dis > para_delta_threshold) {
+      // n_inserted 表示划分份数；循环只插入仍严格位于右端点之前的内部样本。
       int n_inserted = static_cast<int>(dis / para_delta_threshold) + 1;
       decimal_t delta_para = dis / n_inserted;
       for (int n = 0; n < n_inserted; n++) {
@@ -45,6 +40,7 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetCubicSplineBySampleInterpolation(
         if (para_insert < para[i]) {
           interpolated_para.push_back(para_insert);
           Vecf<N_DIM> sample_insert;
+          // 几何位置按同一参数比例在线段上做线性插值，而不是沿未知真实曲线插值。
           for (int d = 0; d < N_DIM; d++) {
             sample_insert[d] = (samples[i][d] - samples[i - 1][d]) * partion +
                                samples[i - 1][d];
@@ -57,8 +53,10 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetCubicSplineBySampleInterpolation(
     interpolated_samples.push_back(samples[i]);
   }
 
+  // 每个参数区间对应一个 PolynomialND 分段。
   cubic_spline.set_vec_domain(interpolated_para);
   for (int i = 0; i < N_DIM; i++) {
+    // tk::spline 逐维处理标量序列，维度之间没有耦合。
     std::vector<decimal_t> X, Y;
     for (int s = 0; s < static_cast<int>(interpolated_samples.size()); s++) {
       X.push_back(interpolated_para[s]);
@@ -68,12 +66,14 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetCubicSplineBySampleInterpolation(
     tk::spline cubic_fitting;
     cubic_fitting.set_points(X, Y);
 
+    // 将普通三次幂基系数转换为 Polynomial 的阶乘缩放、最高阶在前表示。
     for (int n = 0; n < cubic_fitting.num_pts() - 1; n++) {
       Vecf<N_DEG + 1> coeff = Vecf<N_DEG + 1>::Zero();
       for (int d = 0; d <= N_DEG; d++) {
         if (d <= 3) {
           coeff[N_DEG - d] = cubic_fitting.get_coeff(n, d) * fac(d);
         } else {
+          // 统一容器高于三次的系数保持为零。
           coeff[N_DEG - d] = 0.0;
         }
       }
@@ -89,9 +89,7 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetQuinticSplineBySampleFitting(
     const vec_Vecf<N_DIM>& samples, const std::vector<decimal_t>& para,
     const Eigen::ArrayXf& breaks, const decimal_t regulator,
     SplineType* spline) {
-  // ~ the polynomial order follows the definition in polynomial.h
-  // printf("number of samples: %d.\n", static_cast<int>(samples.size()));
-  // std::cout << "breaks: " << breaks.transpose() << std::endl;
+  // 优化变量沿用 Polynomial 中“最高阶在前、按阶乘缩放”的系数顺序。
 
   if (N_DEG < 5) {
     printf("[QuinticSpline]Degree not support.\n");
@@ -103,17 +101,15 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetQuinticSplineBySampleFitting(
   }
 
   if (samples.size() < 3) {
-    // printf("[QuinticSpline]Cannot support less than three samples.\n");
     return kWrongStatus;
   }
 
-  // TicToc timer;
+  // 每维、每段各有 N_DEG+1 个多项式系数变量。
   int num_segments = breaks.size() - 1;
   int num_samples = static_cast<int>(samples.size());
   int num_order = N_DEG + 1;
 
-  // re-organize samples and compute relative t
-  // vec_E<vec_E<std::pair<double, Vecf<N_DIM>>>> all_samples;
+  // 按断点把样本参数分配到各段，并转换为相对该段左端点的局部参数。
   std::vector<std::vector<double>> all_samples;
   std::vector<decimal_t> durations;
   std::vector<int> num_samples_hist{0};
@@ -123,11 +119,9 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetQuinticSplineBySampleFitting(
       std::vector<double> sub_samples;
       auto lbd = breaks[n];
       auto ubd = breaks[n + 1];
-      // auto lower_it = std::lower_bound(para.begin(), para.end(), lbd);
+      // upper_bound 使恰好位于共享断点的样本归入左侧分段。
       auto upper_it = std::upper_bound(para.begin(), para.end(), ubd);
-      // int idx_low = static_cast<int>(lower_it - para.begin());
       int idx_up = static_cast<int>(upper_it - para.begin());
-      // printf("idx_low: %d, idx_up: %d.\n", idx_low, idx_up);
       for (int i = idx_low; i < idx_up; i++) {
         sub_samples.push_back(para[i] - lbd);
       }
@@ -138,8 +132,7 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetQuinticSplineBySampleFitting(
     }
   }
 
-  // timer.tic();
-  // prepare A
+  // A 把所有分段、所有维度的系数映射为各样本位置预测值。
   Eigen::SparseMatrix<double, Eigen::RowMajor> A(
       N_DIM * num_samples, N_DIM * num_segments * num_order);
   A.reserve(Eigen::VectorXi::Constant(N_DIM * num_samples, num_order));
@@ -151,6 +144,7 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetQuinticSplineBySampleFitting(
       for (int i = 0; i < num_sub_samples; i++) {
         auto deltat = all_samples[n][i];
         for (int j = 0; j < num_order; j++) {
+          // 阶乘缩放系数对应的零阶幂基项。
           val = pow(deltat, num_order - j - 1) / fac(num_order - j - 1);
           for (int d = 0; d < N_DIM; d++) {
             idx = d * num_samples + num_samples_hist[n] + i;
@@ -162,7 +156,7 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetQuinticSplineBySampleFitting(
     }
   }
 
-  // prepare b
+  // b 按“维度优先、样本次序次之”堆叠观测位置。
   Eigen::VectorXd b;
   b.resize(N_DIM * num_samples);
   {
@@ -173,11 +167,11 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetQuinticSplineBySampleFitting(
     }
   }
 
-  // prepare S
+  // 所有样本使用相同单位权重。
   Eigen::DiagonalMatrix<double, Eigen::Dynamic> S(N_DIM * num_samples);
   S.diagonal() = Eigen::VectorXd::Ones(N_DIM * num_samples);
 
-  // prepare W
+  // W 对每段最高三个系数施加逐级衰减的正则，抑制高阶振荡。
   Eigen::DiagonalMatrix<double, Eigen::Dynamic> W(N_DIM * num_segments *
                                                   num_order);
   Eigen::VectorXd weight(N_DIM * num_segments * num_order);
@@ -194,9 +188,9 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetQuinticSplineBySampleFitting(
   }
   W.diagonal() = weight;
 
-  // prepare C
+  // Cx=0 约束相邻分段在连接点的位置、一阶、二阶和三阶导数连续。
   int num_connections = num_segments - 1;
-  int num_continuity = 4;  // continuity up to jerk should be enough
+  int num_continuity = 4;
   Eigen::SparseMatrix<double, Eigen::RowMajor> C(
       N_DIM * num_connections * num_continuity,
       N_DIM * num_segments * num_order);
@@ -210,6 +204,7 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetQuinticSplineBySampleFitting(
         for (int j = 0; j < num_order; j++) {
           if (j <= num_order - 1 - c) {
             auto T = durations[n];
+            // 左段在局部终点 T 求值，右段在局部起点 0 求值并取负号。
             val_l = pow(T, num_order - j - 1 - c) / fac(num_order - j - 1 - c);
             val_r =
                 -pow(0.0, num_order - j - 1 - c) / fac(num_order - j - 1 - c);
@@ -228,16 +223,15 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetQuinticSplineBySampleFitting(
     }
   }
 
-  // prepare c
+  // 所有连续性约束右端均为零。
   Eigen::VectorXd c;
   c.resize(N_DIM * num_connections * num_continuity);
   c.setZero();
 
-  // double t_elapsed = timer.toc();
-  // printf("time consumed in wrap constraints: %lf.\n", t_elapsed);
-
+  // 求解带等式约束和系数正则的加权最小二乘问题。
   Eigen::VectorXd x(N_DIM * num_segments * num_order);
   if (QuadraticProblem::solve(A, S, b, W, C, c, x)) {
+    // 将解向量按维度、分段拆回普通 Spline 的局部多项式。
     SplineType quintic_spline;
     std::vector<double> vec_domain;
     for (int i = 0; i < breaks.size(); i++) vec_domain.push_back(breaks[i]);
@@ -270,11 +264,13 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetWaypointsFromPositionSamples(
     return kIllegalInput;
   }
 
+  // 输出采用覆盖语义，每个样本只固定位置并携带对应参数戳。
   waypoints->clear();
   waypoints->reserve(num_samples);
   for (int i = 0; i < num_samples; i++) {
     Waypoint<N_DIM> wp;
     wp.pos = samples[i];
+    // 速度、加速度和 jerk 保持 Waypoint 默认未固定状态。
     wp.fix_pos = true;
     wp.t = para[i];
     wp.stamped = true;
@@ -284,6 +280,7 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetWaypointsFromPositionSamples(
   return kSuccess;
 }
 
+// 先将车辆标量速度/加速度按航向展开为 FreeState，再逐段做五次边界连接。
 template <int N_DEG, int N_DIM>
 ErrorType SplineGenerator<N_DEG, N_DIM>::GetSplineFromStateVec(
     const std::vector<decimal_t>& para, const vec_E<State>& state_vec,
@@ -299,6 +296,7 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetSplineFromStateVec(
     return kWrongStatus;
   }
 
+  // release 构建只依赖该 assert 保证状态数量和参数数量一致。
   assert(para.size() == state_vec.size());
   spline->set_vec_domain(para);
   int num_pts = static_cast<int>(state_vec.size());
@@ -308,10 +306,12 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetSplineFromStateVec(
     GetFreeStateFromState(state_vec[i + 1], &s1);
     for (int d = 0; d < N_DIM; d++) {
       if (d <= 1) {
+        // x/y 各自独立满足两端位置、速度、加速度边界。
         (*spline)(i, d).GetJerkOptimalConnection(
             s0.position[d], s0.velocity[d], s0.acceleration[d], s1.position[d],
             s1.velocity[d], s1.acceleration[d], para[i + 1] - para[i]);
       } else {
+        // State 只定义二维运动，更高输出维统一置零。
         (*spline)(i, d).set_zero();
       }
     }
@@ -319,6 +319,7 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetSplineFromStateVec(
   return kSuccess;
 }
 
+// FreeState 已直接给出世界 x/y 速度与加速度，无需再做航向展开。
 template <int N_DEG, int N_DIM>
 ErrorType SplineGenerator<N_DEG, N_DIM>::GetSplineFromFreeStateVec(
     const std::vector<decimal_t>& para, const vec_E<FreeState>& free_state_vec,
@@ -333,6 +334,7 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetSplineFromFreeStateVec(
     printf("[GetSplineFromStateVec]failed to get spline from state vec.\n");
     return kWrongStatus;
   }
+  // release 构建只依赖该 assert 保证状态数量和参数数量一致。
   assert(para.size() == free_state_vec.size());
   spline->set_vec_domain(para);
   int num_pts = static_cast<int>(free_state_vec.size());
@@ -342,6 +344,7 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetSplineFromFreeStateVec(
     FreeState s1 = free_state_vec[i + 1];
     for (int d = 0; d < N_DIM; d++) {
       if (d <= 1) {
+        // 分段时长直接取相邻参数差；非递增参数会进入退化连接分支。
         (*spline)(i, d).GetJerkOptimalConnection(
             s0.position[d], s0.velocity[d], s0.acceleration[d], s1.position[d],
             s1.velocity[d], s1.acceleration[d], para[i + 1] - para[i]);
