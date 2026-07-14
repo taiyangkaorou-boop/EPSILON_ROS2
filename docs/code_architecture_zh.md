@@ -72,7 +72,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.2b2b `core/common` Bezier 曲线与分段 Bezier 样条。
 - [x] M0.2b2c1 `core/common` SplineGenerator 插值、拟合与状态连接。
 - [x] M0.2b2c2 `core/common` 带参考接近项的 Bezier corridor QP。
-- [ ] M0.2b2c3 `core/common` 基础 Bezier corridor QP。
+- [x] M0.2b2c3 `core/common` 基础 Bezier corridor QP。
 - [ ] M0.2b3 `core/common` 轨迹表示与生成。
 - [ ] M0.2c `core/common` 求解器、安全模型、车辆行为模型与可视化。
 - [ ] M0.3 语义地图、前向仿真、预测和行为规划。
@@ -294,3 +294,15 @@ SSC map adapter 明确填充，不能因为障碍物本身没有时间字段就�
 首末约束数组超过三项时会分配额外全零等式行；全局参数域忽略后续 cube 的 `t_lb`，
 所以时间不连续时优化尺度与回填求值尺度不一致。凸包盒约束是充分但可能保守的安全
 条件，后续实验需区分“QP 不可行”与“真实连续轨迹不可行”。
+
+## 18. M0.2b2c3：纯平滑 Bezier corridor QP
+
+无参考项重载复用相同的时间缩放控制变量、首末二阶状态边界、跨段 C2 连续性和
+位置/速度/加速度凸包盒约束，但线性目标恒为零，也不构造离散参考位置的外积矩阵。
+因此它在硬约束可行域内只优化积分 jerk 平方，是当前 SSC 轨迹生成的基础求解入口。
+
+该重载继承第 17 节记录的空走廊、时间连续性、边界顺序、约束阶数和输出指针风险。
+此外，两套 corridor 函数复制了约三百行等式/不等式组装逻辑，已经出现维护漂移：带
+参考项入口为适配 `0.5*x'Qx+c'x` 将总二次矩阵乘 2，纯平滑入口没有乘 2。纯平滑时
+这只是整体目标尺度变化，理论最优解不变，但会改变求解器数值尺度与容差表现；一旦
+加入其他软目标便不再等价。后续应抽取共享 QP builder，并对两重载做矩阵级一致性测试。

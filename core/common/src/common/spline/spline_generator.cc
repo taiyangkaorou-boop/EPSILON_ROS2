@@ -756,17 +756,19 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetBezierSplineUsingCorridor(
     const vec_E<Vecf<N_DIM>>& start_constraints,
     const vec_E<Vecf<N_DIM>>& end_constraints,
     BezierSplineType* bezier_spline) {
+  // 该重载不含参考跟踪软代价，仅最小化走廊内轨迹的积分 jerk 平方。
   int num_segments = static_cast<int>(cubes.size());
   int num_order = N_DEG + 1;
   int derivative_degree = 3;
 
-  // ~ Stage I: stack objective
+  // 阶段一：按维度和分段堆叠 jerk 平滑二次目标。
   int total_num_vals = N_DIM * num_segments * num_order;
   Eigen::SparseMatrix<double, Eigen::RowMajor> Q(total_num_vals,
                                                  total_num_vals);
   Q.reserve(
       Eigen::VectorXi::Constant(N_DIM * num_segments * num_order, num_order));
   {
+    // 五次 Bernstein 三阶导数 Gram 矩阵形成块对角目标。
     MatNf<N_DEG + 1> hessian =
         BezierUtils<N_DEG>::GetBezierHessianMat(derivative_degree);
     int idx, idy;
@@ -778,6 +780,7 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetBezierSplineUsingCorridor(
           for (int k = 0; k < num_order; k++) {
             idx = d * num_segments * num_order + n * num_order + j;
             idy = d * num_segments * num_order + n * num_order + k;
+            // 时间缩放曲线的积分 jerk 平方随分段时长按 duration^-3 缩放。
             val = hessian(j, k) / pow(duration, 2 * derivative_degree - 3);
             Q.insert(idx, idy) = val;
           }
@@ -788,17 +791,18 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetBezierSplineUsingCorridor(
 
   Eigen::VectorXd c;
   c.resize(total_num_vals);
+  // 无参考项或其他线性软目标。
   c.setZero();
 
-  // ~ Stage II: stack equality constraints
-  int num_continuity = 3;  // continuity up to jerk
+  // 阶段二：构造段间 C2 连续性和首末状态等式约束。
+  // 常量 3 只执行位置、速度、加速度分支，保留的 jerk 分支当前不可达。
+  int num_continuity = 3;
   int num_connections = num_segments - 1;
-  // printf("num conenctions: %d.\n", num_connections);
   int num_continuity_constraints = N_DIM * num_connections * num_continuity;
   int num_start_eq_constraints =
       static_cast<int>(start_constraints.size()) * N_DIM;
   int num_end_eq_constraints = static_cast<int>(end_constraints.size()) *
-                               N_DIM;  // exclude s position constraint
+                               N_DIM;
   int total_num_eq_constraints = num_continuity_constraints +
                                  num_start_eq_constraints +
                                  num_end_eq_constraints;
@@ -813,7 +817,7 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetBezierSplineUsingCorridor(
   int idx, idy;
   decimal_t val;
   {
-    // ~ continuity constraints
+    // 连续性按维度独立组装，时长尺度与 BezierSpline::evaluate 保持一致。
     for (int n = 0; n < num_connections; n++) {
       decimal_t duration_l = cubes[n].t_ub - cubes[n].t_lb;
       decimal_t duration_r = cubes[n + 1].t_ub - cubes[n + 1].t_lb;
@@ -823,23 +827,21 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetBezierSplineUsingCorridor(
         for (int d = 0; d < N_DIM; d++) {
           idx = d * num_connections * num_continuity + n * num_continuity + c;
           if (c == 0) {
-            // ~ position end
+            // 左段末位置减右段初位置等于零。
             idy = d * num_segments * num_order + n * num_order + N_DEG;
             val = 1.0 * scale_l;
             A.insert(idx, idy) = val;
-            // ~ position begin
             idy = d * num_segments * num_order + (n + 1) * num_order + 0;
             val = 1.0 * scale_r;
             A.insert(idx, idy) = -val;
           } else if (c == 1) {
-            // ~ velocity end
+            // 一阶端点差，公共 N_DEG 因子在等式两侧约去。
             idy = d * num_segments * num_order + n * num_order + N_DEG - 1;
             val = -1.0 * scale_l;
             A.insert(idx, idy) = val;
             idy = d * num_segments * num_order + n * num_order + N_DEG;
             val = 1.0 * scale_l;
             A.insert(idx, idy) = val;
-            // ~ velocity begin
             idy = d * num_segments * num_order + (n + 1) * num_order;
             val = -1.0 * scale_r;
             A.insert(idx, idy) = -val;
@@ -847,7 +849,7 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetBezierSplineUsingCorridor(
             val = 1.0 * scale_r;
             A.insert(idx, idy) = -val;
           } else if (c == 2) {
-            // ~ acceleration end
+            // 二阶端点差，公共 N_DEG*(N_DEG-1) 因子在两侧约去。
             idy = d * num_segments * num_order + n * num_order + N_DEG - 2;
             val = 1.0 * scale_l;
             A.insert(idx, idy) = val;
@@ -857,7 +859,6 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetBezierSplineUsingCorridor(
             idy = d * num_segments * num_order + n * num_order + N_DEG;
             val = 1.0 * scale_l;
             A.insert(idx, idy) = val;
-            // ~ acceleration begin
             idy = d * num_segments * num_order + (n + 1) * num_order;
             val = 1.0 * scale_r;
             A.insert(idx, idy) = -val;
@@ -868,7 +869,7 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetBezierSplineUsingCorridor(
             val = 1.0 * scale_r;
             A.insert(idx, idy) = -val;
           } else if (c == 3) {
-            // ~ jerk end
+            // 预留的 jerk 连续性组装；当前循环上界使其不会执行。
             idy = d * num_segments * num_order + n * num_order + N_DEG - 3;
             val = -1.0 * scale_l;
             A.insert(idx, idy) = val;
@@ -881,7 +882,6 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetBezierSplineUsingCorridor(
             idy = d * num_segments * num_order + n * num_order + N_DEG;
             val = 1.0 * scale_l;
             A.insert(idx, idy) = val;
-            // ~ jerk begin
             idy = d * num_segments * num_order + (n + 1) * num_order;
             val = -1.0 * scale_r;
             A.insert(idx, idy) = -val;
@@ -899,7 +899,7 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetBezierSplineUsingCorridor(
       }
     }
 
-    // ~ start state constraints
+    // 首段起点支持位置、速度、加速度边界，输入顺序即导数阶数。
     {
       int num_order_constraint_start =
           static_cast<int>(start_constraints.size());
@@ -911,13 +911,14 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetBezierSplineUsingCorridor(
         for (int d = 0; d < N_DIM; d++) {
           idx = num_continuity_constraints + d * num_order_constraint_start + j;
           if (j == 0) {
+            // 起始位置控制变量。
             idy = d * num_segments * num_order + n * num_order + 0;
             val = 1.0 * scale;
             A.insert(idx, idy) = val;
 
             b[idx] = start_constraints[j][d];
-            // printf("d: %d, j: %d, idx: %d, b: %lf.\n", d, j, idx, b[idx]);
           } else if (j == 1) {
+            // 起始一阶差分控制速度。
             idy = d * num_segments * num_order + n * num_order + 0;
             val = -1.0 * N_DEG * scale;
             A.insert(idx, idy) = val;
@@ -926,8 +927,8 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetBezierSplineUsingCorridor(
             A.insert(idx, idy) = val;
 
             b[idx] = start_constraints[j][d];
-            // printf("d: %d, j: %d, idx: %d, b: %lf.\n", d, j, idx, b[idx]);
           } else if (j == 2) {
+            // 起始二阶差分控制加速度。
             idy = d * num_segments * num_order + n * num_order + 0;
             val = 1.0 * N_DEG * (N_DEG - 1) * scale;
             A.insert(idx, idy) = val;
@@ -941,12 +942,11 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetBezierSplineUsingCorridor(
             A.insert(idx, idy) = val;
 
             b[idx] = start_constraints[j][d];
-            // printf("d: %d, j: %d, idx: %d, b: %lf.\n", d, j, idx, b[idx]);
           }
         }
       }
     }
-    // ~ end state constraints
+    // 末段终点使用末尾控制变量及其反向有限差分施加同类边界。
     {
       int num_order_constraint_end = static_cast<int>(end_constraints.size());
       decimal_t duration =
@@ -958,14 +958,15 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetBezierSplineUsingCorridor(
       for (int j = 0; j < num_order_constraint_end; j++) {
         scale = pow(duration, 1 - j);
         for (int d = 0; d < N_DIM; d++) {
-          // if (j == 0 && d == 0) continue;
           idx = accu_eq_cons_idx++;
           if (j == 0) {
+            // 末位置。
             idy = d * num_segments * num_order + n * num_order + N_DEG;
             val = 1.0 * scale;
             A.insert(idx, idy) = val;
             b[idx] = end_constraints[j][d];
           } else if (j == 1) {
+            // 末速度。
             idy = d * num_segments * num_order + n * num_order + N_DEG - 1;
             val = -1.0 * N_DEG * scale;
             A.insert(idx, idy) = val;
@@ -974,6 +975,7 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetBezierSplineUsingCorridor(
             A.insert(idx, idy) = val;
             b[idx] = end_constraints[j][d];
           } else if (j == 2) {
+            // 末加速度。
             idy = d * num_segments * num_order + n * num_order + N_DEG - 2;
             val = 1.0 * N_DEG * (N_DEG - 1) * scale;
             A.insert(idx, idy) = val;
@@ -992,7 +994,7 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetBezierSplineUsingCorridor(
     }
   }
 
-  // ~ Stage III: stack inequality constraints
+  // 阶段三：通过 Bezier 导数控制点的凸包性质施加整段盒约束。
   int total_num_ineq = 0;
   for (int i = 0; i < num_segments; i++) {
     total_num_ineq += (static_cast<int>(cubes[i].p_ub.size())) * num_order;
@@ -1001,7 +1003,6 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetBezierSplineUsingCorridor(
     total_num_ineq +=
         (static_cast<int>(cubes[i].a_ub.size())) * (num_order - 2);
   }
-  // Eigen::SparseMatrix<double, Eigen::RowMajor> C;
   Eigen::VectorXd lbd;
   Eigen::VectorXd ubd;
   Eigen::SparseMatrix<double, Eigen::RowMajor> C(total_num_ineq,
@@ -1015,7 +1016,7 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetBezierSplineUsingCorridor(
       decimal_t duration = cubes[n].t_ub - cubes[n].t_lb;
       decimal_t scale;
       for (int d = 0; d < N_DIM; d++) {
-        // ~ enforce position bounds
+        // 缩放位置控制点全部限制在 cube 位置区间。
         scale = pow(duration, 1 - 0);
         for (int j = 0; j < num_order; j++) {
           idx = accu_num_ineq;
@@ -1026,7 +1027,7 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetBezierSplineUsingCorridor(
           ubd[idx] = cubes[n].p_ub[d];
           accu_num_ineq++;
         }
-        // ~ enforce velocity bounds
+        // 一阶控制变量差分全部限制在速度区间。
         scale = pow(duration, 1 - 1);
         for (int j = 0; j < num_order - 1; j++) {
           idx = accu_num_ineq;
@@ -1040,7 +1041,7 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetBezierSplineUsingCorridor(
           ubd[idx] = cubes[n].v_ub[d];
           accu_num_ineq++;
         }
-        // ~ enforce acceleration bounds
+        // 二阶控制变量差分全部限制在加速度区间。
         scale = pow(duration, 1 - 2);
         for (int j = 0; j < num_order - 2; j++) {
           idx = accu_num_ineq;
@@ -1061,12 +1062,12 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetBezierSplineUsingCorridor(
     }
   }
 
-  // dummy constraints
+  // OOQP 变量界使用接近 double 最大值的宽松上下界，实际约束由 C/lbd/ubd 给出。
   Eigen::VectorXd u = std::numeric_limits<double>::max() *
                       Eigen::VectorXd::Ones(total_num_vals);
   Eigen::VectorXd l = (-u.array()).matrix();
 
-  // ~ Stage IV: solve
+  // 阶段四：调用 OOQP 求解纯平滑目标下的走廊约束二次规划。
   Eigen::VectorXd x;
   x.setZero(total_num_vals);
   if (!OoQpItf::solve(Q, c, A, b, C, lbd, ubd, l, u, x, true, false)) {
@@ -1074,8 +1075,7 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetBezierSplineUsingCorridor(
     return kWrongStatus;
   }
 
-  // std::cout << "solver result: " << x.transpose() << std::endl;
-  // ~ Stage V: set back to bezier struct
+  // 阶段五：使用首段下界和各段上界构造参数域，并回填控制变量。
   std::vector<decimal_t> vec_domain;
   vec_domain.push_back(cubes.front().t_lb);
   for (int n = 0; n < num_segments; n++) {
@@ -1093,6 +1093,7 @@ ErrorType SplineGenerator<N_DEG, N_DIM>::GetBezierSplineUsingCorridor(
   return kSuccess;
 }
 
+// 模板实现只为项目实际使用的五次二维/一维组合生成链接符号。
 template class SplineGenerator<5, 2>;
 template class SplineGenerator<5, 1>;
 
