@@ -128,7 +128,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [ ] M0.5 全仓覆盖审计和遗漏补齐。
 - [ ] M0.5a EUDM 决策树、地图接口、规划器、管理器、ROS 与配置。
 - [x] M0.5a1 EUDM DCP tree 与公共 Task/LaneChangeInfo 接口。
-- [ ] M0.5a2 EUDM 地图接口与 SemanticMapManager 适配器。
+- [x] M0.5a2 EUDM 地图接口与 SemanticMapManager 适配器。
 - [ ] M0.5a3 EUDM 规划核心。
 - [ ] M0.5a4 EUDM manager、ROS server 与 visualizer。
 - [ ] M0.5a5 EUDM proto、CMake 与 package 元数据。
@@ -1576,3 +1576,31 @@ user_perferred_behavior 还存在拼写错误且用裸 int，无枚举/合法范
 Config/Task 构造校验和强类型行为，明确 ongoing 纵横向动作完成语义，采用受约束 grammar/
 beam search 生成可表达多阶段交互但规模可控的脚本，并为 H=0/1、负时间、未初始化 Task、
 矛盾换道标志、候选数公式和 horizon 一致性建立测试。
+
+## 67. M0.5a2：EUDM 语义地图接口与适配层
+
+- EudmPlannerMapItf 隔离 EUDM 算法和 SemanticMapManager，统一暴露自车、最近 Lane、拓扑
+  可达性、相邻/前后继 Lane、局部参考线、原始/语义周车、碰撞和前后车 Frenet 查询；结果
+  主要通过裸输出指针和 ErrorType 返回；
+- EudmPlannerMapAdapter 共享持有 SemanticMapManager。普通 getter 复制自车、车辆集或完整
+  LaneNet，几何查询则薄转发到底层并把失败统一压缩为 kWrongStatus；GetLaneByLaneId 和
+  GetRefLaneForStateByBehavior 额外检查 Lane::IsValid；
+- GetEgoLaneIdByPosition 把自车状态转为 (x,y,theta) 后调用最近 Lane 查询；左右 Lane 只有
+  semantic lane 声明 change available 才写回；child/father 查询使用 assign 覆盖输出容器；
+- IsLaneConsistent 对相同 ID 直接返回 true，否则仅沿 child 边做 BFS，最多扩展 20 个节点；
+  该结果被 EudmManager 用于判断换道上下文/提案是否仍与当前 Lane 连续；
+- EudmManager::Prepare 每周期 set_map，EudmPlanner 保存适配器的非拥有基类指针；但 manager
+  还通过 map() 直接调用 GetEgoNearestLaneId、time_stamp 和高质量参考 Lane，抽象边界并不完整。
+
+已确认的后续修复/验证点：EudmPlannerMapItf 没有虚析构函数，通过基类指针拥有/销毁派生类
+会产生未定义行为；全部输出参数均为裸指针且不检查 nullptr。set_map 无条件把 is_valid_ 置真，
+即使 map_ptr 为空，随后查询仍会解引用空指针；IsLaneConsistent 更完全不检查 is_valid_/map_，
+仅 old==new 的短路分支可在未初始化时返回。GetRefLaneForStateByBehavior 声明遗漏 override，
+接口签名漂移时缺少编译器保护。底层具体错误和“未找到目标”都被压缩成 kWrongStatus，诊断信息
+不足，失败时输出参数通常保留旧值。最近 Lane 查询存在未使用的 dist_set。IsLaneConsistent 的
+20 节点硬上限、仅 child 方向和容器遍历顺序会在长路段/分叉图上产生不稳定假阴性，而且函数名
+没有表达“有限下游可达”的真实语义。GetKey/Surrounding/SemanticVehicles 与 GetWholeLaneNet
+每次按值复制，地图和交通规模增大后会增加规划周期抖动；map() 又暴露可变 shared_ptr，使调用方
+绕过接口有效性和错误语义。M1 应补虚析构、非空/有效性契约、override 和精确错误码，统一
+const/read-only 地图快照接口；将 Lane 连续性改为带明确距离/深度预算且可测试的拓扑查询，并对
+空 map、空输出指针、超过 20 节点的链/分叉、失败输出保持、复制开销建立单元与基准测试。
