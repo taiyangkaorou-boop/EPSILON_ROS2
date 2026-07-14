@@ -112,7 +112,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.4a3 VehicleModel 基类与 IdealSteerModel。
 - [ ] M0.4b SSC 地图、规划器、ROS/可视化与配置。
 - [x] M0.4b1 SSC 地图抽象接口与 SemanticMapManager 适配器。
-- [ ] M0.4b2 SSC 时空占用栅格与 corridor 地图。
+- [x] M0.4b2 SSC 时空占用栅格与 corridor 地图。
 - [ ] M0.4b3 SSC 轨迹规划与优化主流程。
 - [ ] M0.4b4 SSC ROS2 服务端与可视化。
 - [ ] M0.4b5 SSC proto、配置、RViz 与构建元数据。
@@ -1132,3 +1132,44 @@ dt/有限性错误契约，建立低速稳定的曲率—横向加速度约束�
 virtual 析构、const/noexcept 与非空输出契约，以不可变 shared snapshot/read view 替代独立
 有效标志和重复深拷贝，严格传播 Status，并为 rollout 建立候选数、时间轴、ID 和尺寸一致性
 校验及空地图/底层碰撞失败测试。
+
+## 55. M0.4b2：SSC Frenet 时空占用栅格与驾驶走廊
+
+- `SscMap::Config` 默认建立 `1000×100×81` 的 `(s,d,t)` 栅格，分辨率分别为
+  `0.25 m/0.2 m/0.1 s`，并统一保存纵横向速度/加速度界、单 cube 最大时间跨度及六方向
+  膨胀步长。类同时 new 原始占用和按自车足迹膨胀后的两张 GridMap；
+- Reset 清走廊/栅格，以 `s_initial-s_back_len`、横向居中位置和初始绝对时间戳设置两张地图
+  原点。ConstructSscMap 先把静态 Frenet 障碍点沿全部时间层拉伸，再按每辆周车预测状态的
+  时间戳，把车身顶点映射到单层 s/d 图并用 OpenCV fillPoly 写入多边形占用；
+- InflateObstacleGrid 全量扫描原始三维栅格，以车辆参考点到车头/车尾距离和横向宽度换算
+  s/d 膨胀格数，把非零占用扩张到第二张地图；
+- 走廊构建从 initial Frenet state 和首个合法未来轨迹状态开始生成三维 seed。相邻 seed 的
+  最小包围盒必须完全空闲，随后 cube 在 s/d 双向和 +t 方向按批次膨胀；后续 seed 若仍在
+  当前 cube 内就合并，否则在最后内部 seed 处裁剪时间上界并开始新 cube；
+- cube 的 s 膨胀还受初始速度和全局加/减速度估算的可达边界限制，单 cube 的 +t 跨度受
+  `kMaxNumOfGridAlongTime` 限制。最终将离散上下界转回 Frenet 指标，并为每个连续 cube
+  附加统一纵横向速度/加速度约束，形成优化器使用的 SpatioTemporalSemanticCubeNd。
+
+已确认的后续修复/验证点：默认构造不初始化两张 GridMap 裸指针，带配置构造用 new 分配，
+空析构却从不 delete；默认复制/赋值又会浅拷贝指针，形成永久泄漏和共享可变别名。默认两张
+地图仅数据区约 16.2 MB。const getter 仍返回可写裸指针，配置和全部 corridor getter 深拷贝。
+Config 不验证尺寸、分辨率、动力学界和膨胀步长；零/负分辨率可除零，零/负步长可令四方向
+膨胀 while 永不结束。start_time_、map_valid_ 和 inters_for_cube_ 实际未使用，map_valid_
+始终为 false；ClearDrivingCorridor 不清 final_corridor/validity，可能暴露陈旧派生结果。
+Reset、ConstructSscMap、动态逐车填图、初始 cube 构造、膨胀和 GridMap 查询的大量 ErrorType
+被忽略，部分候选碰撞时又保存 invalid corridor 后返回成功，而 seed 不足返回失败，错误契约
+不一致。静态填图的地图 t 原点是 initial absolute timestamp，但写入点却使用 `k*resolution`
+而未加 start_time，非零绝对时间下静态障碍可能全部落到地图外；静态点和动态多边形又统一
+丢弃 `s<=0`，该条件没有相对地图原点/自车定义。动态预测只在离散状态时间层填多边形，不做
+时间插值或 swept volume，预测步长大于 0.1 s 时中间层为空；空轨迹错误被上层吞掉，单车
+轨迹还按值复制。车辆占用膨胀使用硬编码 `width-0.5 m`、floor 和开区间循环，窄车/低分辨率
+下可能不写原始占用或产生非对称欠膨胀，且全图扫描再逐占用扩张复杂度很高，越界写错误被
+忽略。seed 不检查初始坐标范围、时间单调、重复或跳变；GetInflationDirections、-t 膨胀和
+CorridorRelaxation 主流程均未使用，六方向参数实际只有前五项部分生效。s 可达边界使用
+`initial_v*1` 的经验补偿并忽略转换错误；free 检查忽略 GridMap 返回码，is_free 可能未定义。
+离散坐标转换得到的是栅格中心而非 cell 外边界，连续 corridor 每侧可能欠半格；首 cube 只
+校验初始 d，不校验 s/t/v/a，失败早退还会造成 validity 与 final corridor 数量不一致。M1
+应以 RAII/value ownership 重构地图，集中验证 Config 和状态时间基准，用保守栅格边界、连续
+扫掠占用和 uncertainty inflation 构图，统一候选级 Status/下标对齐，并用有终止证明的各向
+膨胀与可达集约束替代经验补偿；需覆盖非零起始时间、空/稀疏预测、边界 seed、窄车、零步长、
+无效 GridMap 查询和多候选部分失败测试。
