@@ -864,6 +864,12 @@ struct PointVecForKdTree {
   }
 };
 
+/**
+ * @brief 单个时间段内对位置、速度和加速度施加上下界的时空语义 cube。
+ *
+ * cube 是 SSC/QP 的约束载体。默认边界使用有限宽松值而非无穷大，以避免数值求解
+ * 不稳定；调用方应在加入 corridor 前覆盖真实时间与运动边界。
+ */
 template <int N_DIM>
 struct SpatioTemporalSemanticCubeNd {
   decimal_t t_lb, t_ub;
@@ -871,11 +877,12 @@ struct SpatioTemporalSemanticCubeNd {
   std::array<decimal_t, N_DIM> v_lb, v_ub;
   std::array<decimal_t, N_DIM> a_lb, a_ub;
 
+  /// 构造并填充宽松有限默认边界。
   SpatioTemporalSemanticCubeNd() { FillDefaultBounds(); }
 
+  /// 重置时间、位置、速度和加速度边界为数值稳定的默认范围。
   void FillDefaultBounds() {
-    // ~ for optimization, infinity bound will cause numerical
-    // ~ unstable. So we put some loose bounds by default
+    // 优化器使用无穷边界可能数值不稳定，因此使用有限但宽松的默认约束。
     t_lb = 0.0;
     t_ub = 1.0;
 
@@ -896,83 +903,125 @@ struct SpatioTemporalSemanticCubeNd {
   }
 };
 
+/// SSC 栅格中的一个三维 driving cube 及其生成时使用的种子体素。
 struct DrivingCube {
   vec_E<Vec3i> seeds;
   AxisAlignedCubeNd<int, 3> cube;
 };
 
+/// 一条由有序 driving cube 构成的候选时空走廊。
 struct DrivingCorridor {
   int id;
   bool is_valid;
   vec_E<DrivingCube> cubes;
 };
 
+/**
+ * @brief 以二维线段为作用区域、带时间/速度/横向范围约束的交通语义基类。
+ *
+ * start/end angle 目前只服务可视化；真正约束范围由端点、valid_time、vel_range 和
+ * lateral_range 表达。所有 setter 均为直接赋值，不检查上下界顺序。
+ */
 class TrafficSignal {
  public:
+  /// 构造零长度线段、全时间有效、零速度范围和默认半车道横向范围的信号。
   TrafficSignal();
+  /// 使用作用线段、有效时间和速度范围构造信号，横向范围使用默认值。
   TrafficSignal(const Vec2f &start_point, const Vec2f &end_point,
-                const Vec2f &valid_time, const Vec2f &vel_range);
+                 const Vec2f &valid_time, const Vec2f &vel_range);
+  /// 设置作用线段起点。
   void set_start_point(const Vec2f &start_point);
+  /// 设置作用线段终点。
   void set_end_point(const Vec2f &end_point);
+  /// 只设置有效时间区间上界。
   void set_valid_time_til(const decimal_t max_valid_time);
+  /// 只设置有效时间区间下界。
   void set_valid_time_begin(const decimal_t min_valid_time);
+  /// 同时设置有效时间 `[begin, end]`。
   void set_valid_time(const Vec2f &valid_time);
+  /// 设置允许速度区间 `[min, max]`。
   void set_vel_range(const Vec2f &vel_range);
+  /// 设置相对信号线的允许横向范围。
   void set_lateral_range(const Vec2f &lateral_range);
+  /// 只设置速度区间上界。
   void set_max_velocity(const decimal_t max_velocity);
 
+  /// 设置起点方向角，仅供当前可视化使用。
   void set_start_angle(const decimal_t angle) { start_angle_ = angle; }
+  /// 设置终点方向角，仅供当前可视化使用。
   void set_end_angle(const decimal_t angle) { end_angle_ = angle; }
 
+  /// 返回作用线段起点。
   Vec2f start_point() const;
+  /// 返回作用线段终点。
   Vec2f end_point() const;
+  /// 返回有效时间区间。
   Vec2f valid_time() const;
+  /// 返回允许速度区间。
   Vec2f vel_range() const;
+  /// 返回允许横向范围。
   Vec2f lateral_range() const;
+  /// 返回速度区间上界，与 vel_range()(1) 等价。
   decimal_t max_velocity() const;
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW;
 
+  /// 返回可视化起点方向角。
   decimal_t start_angle() const { return start_angle_; }
+  /// 返回可视化终点方向角。
   decimal_t end_angle() const { return end_angle_; }
 
  protected:
-  Vec2f start_point_;          // 2d point in x-y plane
-  decimal_t start_angle_ = 0;  // ! (lu.zhang) Temp, for vis
-  Vec2f end_point_;            // 2d point in x-y plane
-  decimal_t end_angle_ = 0;    // ! (lu.zhang) Temp, for vis
-  Vec2f valid_time_;           // time stamp [stamp_begin, stamp_end]
-  Vec2f vel_range_;            // velocity [lower_bound, upper_bound]
+  Vec2f start_point_;          // x-y 平面中的作用线段起点。
+  decimal_t start_angle_ = 0;  // 临时可视化角度，不参与约束计算。
+  Vec2f end_point_;            // x-y 平面中的作用线段终点。
+  decimal_t end_angle_ = 0;    // 临时可视化角度，不参与约束计算。
+  Vec2f valid_time_;           // 有效时间戳区间 [begin, end]。
+  Vec2f vel_range_;            // 允许速度区间 [lower, upper]。
   Vec2f lateral_range_;
 };
 
+/// 在指定线段区域施加速度上下界的交通语义。
 class SpeedLimit : public TrafficSignal {
  public:
+  /// 构造全时间有效的限速区域。
   SpeedLimit(const Vec2f &start_point, const Vec2f &end_point,
              const Vec2f &vel_range);
 };
 
+/// 在指定停止线区域施加零速度要求的交通语义。
 class StoppingSign : public TrafficSignal {
  public:
+  /// 构造全时间有效、速度范围为零的停止标志。
   StoppingSign(const Vec2f &start_point, const Vec2f &end_point);
 };
 
+/// 带离散灯色状态的交通信号灯语义。
 class TrafficLight : public TrafficSignal {
  public:
+  /// 信号灯可用状态；RedYellow 表示红黄同时点亮的过渡状态。
   enum Type { Green = 0, Red, Yellow, RedYellow };
+  /// 设置当前灯色；默认构造后调用方必须显式赋值。
   void set_type(const Type &type);
+  /// 返回当前灯色；未显式设置时成员值未初始化。
   Type type() const;
 
  private:
   Type type_;
 };
 
+/**
+ * @brief 与语义对象相关的无状态转换和车辆几何辅助函数。
+ *
+ * 本类不缓存车辆或地图；所有结果通过返回值/输出指针交付。几何计算仍以 State 的
+ * 后轴中心为输入，并通过 VehicleParam::d_cr 转换到几何中心。
+ */
 class SemanticsUtils {
  public:
   /**
-   * @brief Return the name of longitudinal behavior
+   * @brief 将纵向行为映射为日志使用的单字符缩写。
    *
-   * @param behavior
-   * @return std::string
+   * @param b 纵向行为枚举。
+   * @return std::string M/A/D/S；未知枚举返回 "Null"。
    */
   static std::string RetLonBehaviorName(const LongitudinalBehavior b) {
     std::string b_str;
@@ -1002,10 +1051,10 @@ class SemanticsUtils {
   }
 
   /**
-   * @brief Return the name of lateral behavior
+   * @brief 将横向行为映射为日志使用的单字符缩写。
    *
-   * @param behavior
-   * @return std::string
+   * @param b 横向行为枚举。
+   * @return std::string U/K/L/R；未知枚举返回 "Null"。
    */
   static std::string RetLatBehaviorName(const LateralBehavior b) {
     std::string b_str;
@@ -1035,28 +1084,36 @@ class SemanticsUtils {
   }
 
   /**
-   * @brief Get the Oriented Bounding Box For Vehicle Using State object
+   * @brief 根据车辆参数和后轴中心状态构造车身 OBB。
    *
-   * @param param Vehicle parameter
-   * @param s Vehicle state
-   * @param obb Output Vehicle OBB
-   * @return ErrorType
+   * @param param 车辆几何参数。
+   * @param s 后轴中心处的车辆状态。
+   * @param obb 输出以几何中心为中心的 OBB。
+   * @return ErrorType 当前实现固定返回 kSuccess。
    */
   static ErrorType GetOrientedBoundingBoxForVehicleUsingState(
       const VehicleParam &param, const State &s, OrientedBoundingBox2D *obb);
 
   /**
-   * @brief Get the Vehicle Vertices
+   * @brief 计算车身四个顶点并按左前开始逆时针追加到输出容器。
    *
-   * @param param Vehicle parameter
-   * @param state Vehicle state
-   * @param vertices Output vertice vector
-   * @return ErrorType
+   * @param param 车辆几何参数。
+   * @param state 后轴中心处的车辆状态。
+   * @param vertices 输出顶点容器；当前实现不会先清空已有内容。
+   * @return ErrorType 当前实现固定返回 kSuccess。
    */
   static ErrorType GetVehicleVertices(const VehicleParam &param,
                                       const State &state,
                                       vec_E<Vec2f> *vertices);
 
+  /**
+   * @brief 在不改变 ID、类别和状态的前提下扩张车辆宽度与长度。
+   * @param vehicle_in 输入车辆。
+   * @param delta_w 宽度增量，可为负但当前不检查结果是否为正。
+   * @param delta_l 长度增量，可为负但当前不检查结果是否为正。
+   * @param vehicle_out 输出扩张后的车辆副本。
+   * @return ErrorType 当前实现固定返回 kSuccess。
+   */
   static ErrorType InflateVehicleBySize(const Vehicle &vehicle_in,
                                         const decimal_t delta_w,
                                         const decimal_t delta_l,

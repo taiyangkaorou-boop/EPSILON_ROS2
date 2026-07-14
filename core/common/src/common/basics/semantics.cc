@@ -429,6 +429,7 @@ void ObstacleSet::print() const {
   }
 }
 
+// 默认信号全时间有效；速度上下界为零，横向范围为默认车道半宽。
 TrafficSignal::TrafficSignal()
     : start_point_(Vec2f::Zero()),
       end_point_(Vec2f::Zero()),
@@ -438,6 +439,7 @@ TrafficSignal::TrafficSignal()
 
 TrafficSignal::TrafficSignal(const Vec2f &start_point, const Vec2f &end_point,
                              const Vec2f &valid_time, const Vec2f &vel_range)
+    // 横向范围没有构造参数，统一使用默认 [-1.75, 1.75]。
     : start_point_(start_point),
       end_point_(end_point),
       valid_time_(valid_time),
@@ -445,6 +447,7 @@ TrafficSignal::TrafficSignal(const Vec2f &start_point, const Vec2f &end_point,
       lateral_range_(Vec2f(-1.75, 1.75)) {}
 
 void TrafficSignal::set_start_point(const Vec2f &start_point) {
+  // setter 只更新字段，不检查线段长度或与终点的方向一致性。
   start_point_ = start_point;
 }
 
@@ -453,10 +456,12 @@ void TrafficSignal::set_end_point(const Vec2f &end_point) {
 }
 
 void TrafficSignal::set_valid_time_til(const decimal_t max_valid_time) {
+  // 保留下界，仅替换有效时间上界。
   valid_time_(1) = max_valid_time;
 }
 
 void TrafficSignal::set_valid_time_begin(const decimal_t min_valid_time) {
+  // 保留上界，仅替换有效时间下界。
   valid_time_(0) = min_valid_time;
 }
 
@@ -473,6 +478,7 @@ void TrafficSignal::set_lateral_range(const Vec2f &lateral_range) {
 }
 
 void TrafficSignal::set_max_velocity(const decimal_t max_velocity) {
+  // 最大速度直接复用 vel_range_ 的第二个分量存储。
   vel_range_(1) = max_velocity;
 }
 
@@ -483,6 +489,7 @@ Vec2f TrafficSignal::vel_range() const { return vel_range_; }
 Vec2f TrafficSignal::lateral_range() const { return lateral_range_; }
 decimal_t TrafficSignal::max_velocity() const { return vel_range_(1); }
 
+// 限速和停车标志均默认从时间 0 起永久有效。
 SpeedLimit::SpeedLimit(const Vec2f &start_point, const Vec2f &end_point,
                        const Vec2f &vel_range)
     : TrafficSignal(start_point, end_point,
@@ -494,12 +501,14 @@ StoppingSign::StoppingSign(const Vec2f &start_point, const Vec2f &end_point)
                     Vec2f(0.0, std::numeric_limits<decimal_t>::max()),
                     Vec2f::Zero()) {}
 
+// TrafficLight 没有自定义构造函数，使用前必须通过 setter 初始化 type_。
 void TrafficLight::set_type(const Type &type) { type_ = type; }
 
 TrafficLight::Type TrafficLight::type() const { return type_; }
 
 ErrorType SemanticsUtils::GetOrientedBoundingBoxForVehicleUsingState(
     const VehicleParam &param, const State &s, OrientedBoundingBox2D *obb) {
+  // 将 State 的后轴中心沿航向前移 d_cr，得到车身几何中心。
   double cos_theta = cos(s.angle);
   double sin_theta = sin(s.angle);
   obb->x = s.vec_position[0] + param.d_cr() * cos_theta;
@@ -513,6 +522,7 @@ ErrorType SemanticsUtils::GetOrientedBoundingBoxForVehicleUsingState(
 ErrorType SemanticsUtils::GetVehicleVertices(const VehicleParam &param,
                                              const State &state,
                                              vec_E<Vec2f> *vertices) {
+  // 从后轴中心转换到几何中心，再叠加旋转后的半车宽和半车长向量。
   decimal_t angle = state.angle;
 
   decimal_t cos_theta = cos(angle);
@@ -526,7 +536,7 @@ ErrorType SemanticsUtils::GetVehicleVertices(const VehicleParam &param,
   decimal_t d_lx = param.length() / 2 * cos_theta;
   decimal_t d_ly = param.length() / 2 * sin_theta;
 
-  // Counterclockwise from left-front vertex
+  // 从左前顶点开始逆时针追加四个角点；函数不会清空调用方已有内容。
   vertices->push_back(Vec2f(c_x - d_wx + d_lx, c_y + d_wy + d_ly));
   // vertices->push_back(Vec2f(c_x - d_wx, c_y + d_wy));
   vertices->push_back(Vec2f(c_x - d_wx - d_lx, c_y - d_ly + d_wy));
@@ -543,6 +553,7 @@ ErrorType SemanticsUtils::InflateVehicleBySize(const Vehicle &vehicle_in,
                                                const decimal_t delta_w,
                                                const decimal_t delta_l,
                                                Vehicle *vehicle_out) {
+  // 复制车辆后仅调整几何尺寸，保持状态、ID 和类别不变。
   common::Vehicle inflated_vehicle = vehicle_in;
   common::VehicleParam vehicle_param = vehicle_in.param();
   vehicle_param.set_width(vehicle_param.width() + delta_w);

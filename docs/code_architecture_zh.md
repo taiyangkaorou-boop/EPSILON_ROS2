@@ -64,7 +64,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.2a3a `semantics` 车辆、行为概率、语义车辆与控制信号。
 - [x] M0.2a3b1 `semantics` GridMapMetaInfo/GridMapND。
 - [x] M0.2a3b2 `semantics` 车道、障碍物与 KD-tree 适配。
-- [ ] M0.2a3c `semantics` SSC cube/corridor、交通信号与枚举工具。
+- [x] M0.2a3c `semantics` SSC cube/corridor、交通信号与枚举工具。
 - [ ] M0.2a4 `core/common` 状态与车道类型。
 - [ ] M0.2b `core/common` 数学、样条、轨迹与圆弧。
 - [ ] M0.2c `core/common` 求解器、安全模型、车辆行为模型与可视化。
@@ -148,3 +148,18 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 
 本层只表示地图语义，不决定障碍物在 SSC 时间维的占据方式。静态障碍时间坐标必须由
 SSC map adapter 明确填充，不能因为障碍物本身没有时间字段就沿用未初始化时间索引。
+
+## 10. M0.2a3c：SSC 约束与交通语义
+
+- `SpatioTemporalSemanticCubeNd` 保存时间以及各维位置/速度/加速度上下界；默认使用
+  有限宽松值，避免 QP 中无穷边界导致数值不稳定；
+- `DrivingCube` 把 3D 栅格 cube 与生成它的种子体素关联，`DrivingCorridor` 保存一组
+  有序 cube 及整体有效标记；
+- `TrafficSignal` 用二维作用线段、有效时间、速度范围和横向范围表达统一交通约束，
+  起止角目前只用于可视化；
+- `SpeedLimit` 与 `StoppingSign` 是全时间有效的特化，`TrafficLight` 只额外保存灯色；
+- `SemanticsUtils` 负责行为缩写、车辆 OBB/顶点和尺寸膨胀，不持有运行时状态。
+
+已确认的后续修复/验证点：`TrafficLight::type_` 默认未初始化；交通信号 setter 不检查
+区间顺序；`GetVehicleVertices` 会向输出容器追加而不清空；车辆尺寸膨胀允许得到非正
+尺寸。这些问题不能在纯注释标签内修改，将进入 baseline 静态修复清单。
