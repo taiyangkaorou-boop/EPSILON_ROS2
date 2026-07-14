@@ -90,7 +90,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.3b2a BehaviorPlanner 生命周期、候选枚举与 MPDM winner 输出。
 - [x] M0.3b2b 多车前向 rollout 与碰撞筛选。
 - [x] M0.3b2c 安全/效率/行为代价评估。
-- [ ] M0.3b2d 参考 Lane、Lane ID 状态机与参数访问器。
+- [x] M0.3b2d 参考 Lane、Lane ID 状态机与参数访问器。
 - [ ] M0.3b3 BehaviorPlanner ROS 服务与可视化。
 - [ ] M0.3c SemanticMapManager 支撑组件与主类。
 - [ ] M0.4 SSC、车辆模型、物理仿真、playground 与配置。
@@ -637,3 +637,34 @@ Frenet 间距，常数和三类代价权重均硬编码。最严重的是建议�
 速度；全直线或空轨迹直接输出 `kInf`。该函数还按值复制完整轨迹。M1 应优先修正此速度
 提取错误、候选维度/有限性校验和错误传播，再用可配置、归一化且可解释的安全效率指标
 替代当前经验代价。
+
+## 36. M0.3b2d：最终参考 Lane、Lane 拓扑状态机与参数接口
+
+- `ConstructReferenceLane` 将 LK/Undefined 映射到当前 Lane，将 LCL/LCR 映射到直接相邻
+  Lane；相邻 Lane 不存在时回退当前 Lane，并直接把最终行为改写为 LK。随后沿导航路径
+  截取前 150 m、后 20 m 样本，以累计弦长为参数、固定 20 个 break 和 `1e6` 正则系数
+  拟合连续 Lane；
+- 参考速度从自车在最终 Lane 上的投影位置开始，以 0.2 m 分辨率扫描曲率。前视长度至少
+  20 m，高速时采用 `v²/1.67`，曲率速度约束为 `sqrt(1.5/|kappa|)`；取区间最低值后
+  再减 2 m/s、限制到用户速度上限并向下取整；
+- Lane 归属状态机先基于旧 `ego_lane_id_` 构造三组缓存：LK 为当前 Lane 的子 Lane；
+  LCL/LCR 为相邻 Lane 加其子 Lane。新观测 Lane 先匹配旧 Lane，再依次匹配 LK、LCL、
+  LCR 集合，由此解释为保持、换道完成或 Undefined；
+- 当前行为为 LCL/LCR 时，仍匹配旧 Lane 表示换道进行中，匹配对应相邻集合表示完成并
+  回到 LK，Undefined 表示取消并回到 LK，匹配反方向集合则进入 Undefined；后三种情况
+  都解除 HMI 锁定。L2 HMI 命令立即改写行为，L3 HMI 命令只锁定 MPDM 横向 winner；
+- 参数 setter 直接保存自动驾驶等级、激进程度、仿真步长/时域和状态源开关；用户期望
+  速度只在 L2 以上生效并截断负值。行为和候选轨迹 getter 均返回完整值拷贝。
+
+已确认的后续修复/验证点：最终参考 Lane 在 MPDM 完成后才更新
+`reference_desired_velocity_`，因此本周期候选 rollout 使用上一周期速度约束，而且所有
+候选共用一个速度，没有候选 Lane 独立的曲率限速。相邻 Lane 回退函数还隐式修改全局
+行为。自车状态查询、Frenet 投影和曲率查询错误被忽略；前视上界把“长度”与 Lane 绝对
+终点弧长混用，循环终点可能越过 Lane。零曲率依赖除零产生无穷大，NaN/负速/有限性未
+处理，固定减 2 和向下取整会造成不连续速度阶跃。Lane 拟合不检查输出指针、最少样本、
+重复点或有限坐标，固定 break 数和极大正则项也不随道路长度/形状自适应。状态机的集合
+可重复或重叠，固定优先级会把重叠 ID 优先解释为 LK；所有拓扑查询错误均被忽略，函数
+仍返回成功。当前行为为 Undefined 时没有显式恢复分支。HMI 只处理恰好 L2/L3，L4
+命令被静默忽略；等级、激进度、仿真参数和裸地图指针均无校验，等级切换也不清理锁定。
+大对象 getter 产生不必要复制。M1 应将候选专属参考 Lane/速度约束前移到 rollout，明确
+Lane 状态机事件和恢复策略，并统一 setter、拓扑查询和数值有效性契约。

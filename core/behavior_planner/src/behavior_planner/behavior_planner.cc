@@ -639,6 +639,7 @@ ErrorType BehaviorPlanner::ConstructReferenceLane(
     const LateralBehavior& lat_behavior, Lane* lane) {
   if (map_itf_ == nullptr) return kWrongStatus;
 
+  // 把最终横向行为映射到目标 Lane；Undefined 与 LK 都沿当前自车 Lane 输出参考线。
   int target_lane_id;
   if (lat_behavior == common::LateralBehavior::kLaneKeeping ||
       lat_behavior == common::LateralBehavior::kUndefined) {
@@ -646,6 +647,7 @@ ErrorType BehaviorPlanner::ConstructReferenceLane(
     // printf("[BP]Commanding keep lane %d.\n", target_lane_id);
   } else if (lat_behavior == common::LateralBehavior::kLaneChangeLeft) {
     if (map_itf_->GetLeftLaneId(ego_lane_id_, &target_lane_id) != kSuccess) {
+      // 左侧 Lane 不存在时回退当前 Lane，并同步把最终输出行为降级为 LK。
       printf("[BP]Commanding a left lane change, but no existing lane.\n");
       target_lane_id = ego_lane_id_;
       behavior_.lat_behavior = common::LateralBehavior::kLaneKeeping;
@@ -654,6 +656,7 @@ ErrorType BehaviorPlanner::ConstructReferenceLane(
     //        target_lane_id);
   } else if (lat_behavior == common::LateralBehavior::kLaneChangeRight) {
     if (map_itf_->GetRightLaneId(ego_lane_id_, &target_lane_id) != kSuccess) {
+      // 右侧 Lane 不存在时采用与左换道相同的回退规则。
       printf("[BP]Commanding a right lane change, but no existing lane.\n");
       target_lane_id = ego_lane_id_;
       behavior_.lat_behavior = common::LateralBehavior::kLaneKeeping;
@@ -664,6 +667,7 @@ ErrorType BehaviorPlanner::ConstructReferenceLane(
     assert(false);
   }
 
+  // 获取当前自车状态，并沿导航路径截取目标 Lane 前 150 m、后 20 m 的局部采样。
   State ego_state;
   map_itf_->GetEgoState(&ego_state);
 
@@ -676,10 +680,12 @@ ErrorType BehaviorPlanner::ConstructReferenceLane(
     return kWrongStatus;
   }
 
+  // 将离散中心线样本拟合为可查询位置、切向和曲率的连续 Lane。
   if (ConstructLaneFromSamples(samples, lane) != kSuccess) {
     return kWrongStatus;
   }
 
+  // 把自车投影到新参考 Lane，后续从当前纵向弧长开始扫描曲率。
   common::StateTransformer stf(*lane);
   common::FrenetState current_fs;
   stf.GetFrenetStateFromState(ego_state, &current_fs);
@@ -704,10 +710,12 @@ ErrorType BehaviorPlanner::ConstructReferenceLane(
   const decimal_t sim_lat_max = 1.5;
   decimal_t a_comfort = 1.67;
   decimal_t t_forward = ego_state.velocity / a_comfort;
+  // 前视长度至少 20 m，速度较高时采用 v^2/a_comfort，并受 Lane 终点弧长限制。
   decimal_t s_forward =
       std::min(std::max(20.0, t_forward * ego_state.velocity), lane->end());
   decimal_t resolution = 0.2;
 
+  // 以 0.2 m 分辨率扫描前视区间，取满足 1.5 m/s^2 横向加速度约束的最低速度。
   for (decimal_t s = current_fs.vec_s[0]; s < current_fs.vec_s[0] + s_forward;
        s += resolution) {
     if (lane->GetCurvatureByArcLength(s, &c, &cc) == kSuccess) {
@@ -716,6 +724,7 @@ ErrorType BehaviorPlanner::ConstructReferenceLane(
     }
   }
 
+  // 在曲率速度上再留 2 m/s 裕量，限制到用户速度上限后向下取整到整数 m/s。
   reference_desired_velocity_ =
       std::floor(std::min(std::max(v_ref - 2.0, 0.0), user_desired_velocity_));
 
@@ -725,6 +734,7 @@ ErrorType BehaviorPlanner::ConstructReferenceLane(
 
 ErrorType BehaviorPlanner::ConstructLaneFromSamples(
     const vec_E<Vecf<2>>& samples, Lane* lane) {
+  // 以相邻样本欧氏距离的累计和作为拟合参数，首个样本参数固定为 0。
   double d = 0.0;
   std::vector<decimal_t> para;
   para.push_back(d);
@@ -737,10 +747,12 @@ ErrorType BehaviorPlanner::ConstructLaneFromSamples(
     para.push_back(d);
   }
 
+  // 无论样本数量和局部 Lane 长度如何，均匀生成固定 20 个分段断点。
   const int num_segments = 20;
   Eigen::ArrayXf breaks =
       Eigen::ArrayXf::LinSpaced(num_segments, para.front(), para.back());
 
+  // 使用较大的固定正则系数抑制拟合曲线振荡。
   const decimal_t regulator = (double)1e6;
   if (common::LaneGenerator::GetLaneBySampleFitting(
           samples, para, breaks, regulator, lane) != kSuccess) {
@@ -752,6 +764,7 @@ ErrorType BehaviorPlanner::ConstructLaneFromSamples(
 
 ErrorType BehaviorPlanner::JudgeBehaviorByLaneId(
     const int ego_lane_id_by_pos, LateralBehavior* behavior_by_lane_id) {
+  // 仍观测在旧的当前 Lane 上时，状态机解释为保持车道或尚在换道途中。
   if (ego_lane_id_by_pos == ego_lane_id_) {
     *behavior_by_lane_id = common::LateralBehavior::kLaneKeeping;
     return kSuccess;
@@ -764,9 +777,8 @@ ErrorType BehaviorPlanner::JudgeBehaviorByLaneId(
   auto it_lcr = std::find(potential_lcr_lane_ids_.begin(),
                           potential_lcr_lane_ids_.end(), ego_lane_id_by_pos);
 
+  // 匹配优先级固定为同向子 Lane、左换道目标、右换道目标。
   if (it != potential_lk_lane_ids_.end()) {
-    // ~ if routing information is available, here
-    // ~ we still need to check whether the change is consist with the
     *behavior_by_lane_id = common::LateralBehavior::kLaneKeeping;
     return kSuccess;
   }
@@ -781,62 +793,66 @@ ErrorType BehaviorPlanner::JudgeBehaviorByLaneId(
     return kSuccess;
   }
 
+  // 新 Lane 不属于任何预计算拓扑集合时标记 Undefined，但函数仍返回成功。
   *behavior_by_lane_id = common::LateralBehavior::kUndefined;
   return kSuccess;
 }
 
 ErrorType BehaviorPlanner::UpdateEgoBehavior(
     const LateralBehavior& behavior_by_lane_id) {
+  // 当前为 LK 时，只接受继续 LK 或短暂无法解释的 Lane 跳变；直接观测到换道目标
+  // 会被视为与内部命令不一致，并把行为置为 Undefined。
   if (behavior_.lat_behavior == common::LateralBehavior::kLaneKeeping) {
     if (behavior_by_lane_id == common::LateralBehavior::kLaneKeeping) {
-      // ~ lane keeping
+      // 保持 LK。
     } else if (behavior_by_lane_id == common::LateralBehavior::kUndefined) {
-      // ~ observed lane change is jumping without logic, keep current
-      // ~ behavior
+      // 无法解释的 Lane 跳变暂不改变当前 LK 状态。
     } else {
-      // ~ observed wrong behavior, cause undefined system behavior
+      // 未命令换道却直接落入左右目标 Lane，记为异常状态。
       behavior_.lat_behavior = common::LateralBehavior::kUndefined;
     }
   } else if (behavior_.lat_behavior ==
              common::LateralBehavior::kLaneChangeLeft) {
     if (behavior_by_lane_id == common::LateralBehavior::kLaneKeeping) {
-      // ~ still in the course of lane changing
+      // 仍位于旧 Lane 或其同向子 Lane，认为左换道尚未完成。
     } else if (behavior_by_lane_id ==
                common::LateralBehavior::kLaneChangeLeft) {
-      // ~ lane change complete
+      // 进入左侧目标 Lane 或其子 Lane，换道完成并解除 HMI 锁定。
       behavior_.lat_behavior = common::LateralBehavior::kLaneKeeping;
       lock_to_hmi_ = false;
     } else if (behavior_by_lane_id == common::LateralBehavior::kUndefined) {
-      // ~ lane id jumping in lane change, cancel lane change
+      // 换道中出现无法解释的 Lane 跳变，取消换道并解除锁定。
       behavior_.lat_behavior = common::LateralBehavior::kLaneKeeping;
       lock_to_hmi_ = false;
     } else {
-      // ~ wrong behavior
+      // 左换道过程中却观测到右侧目标 Lane，进入 Undefined 并解除锁定。
       behavior_.lat_behavior = common::LateralBehavior::kUndefined;
       lock_to_hmi_ = false;
     }
   } else if (behavior_.lat_behavior ==
              common::LateralBehavior::kLaneChangeRight) {
     if (behavior_by_lane_id == common::LateralBehavior::kLaneKeeping) {
-      // ~ still in the course of lane changing
+      // 仍位于旧 Lane 或其同向子 Lane，认为右换道尚未完成。
     } else if (behavior_by_lane_id ==
                common::LateralBehavior::kLaneChangeRight) {
-      // ~ lane change complete
+      // 进入右侧目标 Lane 或其子 Lane，换道完成并解除 HMI 锁定。
       behavior_.lat_behavior = common::LateralBehavior::kLaneKeeping;
       lock_to_hmi_ = false;
     } else if (behavior_by_lane_id == common::LateralBehavior::kUndefined) {
-      // ~ lane id jumping in lane change, cancel lane change
+      // 无法解释的 Lane 跳变会取消右换道并解除锁定。
       behavior_.lat_behavior = common::LateralBehavior::kLaneKeeping;
       lock_to_hmi_ = false;
     } else {
+      // 右换道过程中观测到左侧目标 Lane，进入 Undefined 并解除锁定。
       behavior_.lat_behavior = common::LateralBehavior::kUndefined;
       lock_to_hmi_ = false;
     }
-  }  // end enumerating current behaviors
+  }
   return kSuccess;
 }
 
 ErrorType BehaviorPlanner::UpdateEgoLaneId(const int new_ego_lane_id) {
+  // 先提交最新 Lane，再以它为源点重建下一周期 Lane 归属判断需要的三组拓扑缓存。
   ego_lane_id_ = new_ego_lane_id;
   GetPotentialLaneIds(ego_lane_id_, common::LateralBehavior::kLaneKeeping,
                       &potential_lk_lane_ids_);
@@ -853,14 +869,17 @@ ErrorType BehaviorPlanner::GetPotentialLaneIds(
   candidate_lane_ids->clear();
   if (beh == common::LateralBehavior::kUndefined ||
       beh == common::LateralBehavior::kLaneKeeping) {
+    // LK/Undefined 只记录当前 Lane 的同向子 Lane；当前 Lane 本身由调用方单独判断。
     map_itf_->GetChildLaneIds(source_lane_id, candidate_lane_ids);
   } else if (beh == common::LateralBehavior::kLaneChangeLeft) {
+    // 左换道集合包含左侧直接 Lane 及其同向子 Lane。
     int l_lane_id;
     if (map_itf_->GetLeftLaneId(source_lane_id, &l_lane_id) == kSuccess) {
       map_itf_->GetChildLaneIds(l_lane_id, candidate_lane_ids);
       candidate_lane_ids->push_back(l_lane_id);
     }
   } else if (beh == common::LateralBehavior::kLaneChangeRight) {
+    // 右换道集合与左侧对称，子 Lane 先写入、直接相邻 Lane 最后追加。
     int r_lane_id;
     if (map_itf_->GetRightLaneId(source_lane_id, &r_lane_id) == kSuccess) {
       map_itf_->GetChildLaneIds(r_lane_id, candidate_lane_ids);
@@ -873,11 +892,12 @@ ErrorType BehaviorPlanner::GetPotentialLaneIds(
 }
 
 void BehaviorPlanner::set_map_interface(BehaviorPlannerMapItf* itf) {
+  // 仅保存非拥有指针，生命周期由 ROS server 等上层组件保证。
   map_itf_ = itf;
 }
 
 void BehaviorPlanner::set_hmi_behavior(const LateralBehavior& hmi_behavior) {
-  // ~ hmi interface is enabled when >= L2
+  // L2 直接采用人工横向命令；L3 只锁定后续 MPDM winner 的横向行为。
   if (autonomous_level_ == 2) {
     behavior_.lat_behavior = hmi_behavior;
     hmi_behavior_ = hmi_behavior;
@@ -889,28 +909,34 @@ void BehaviorPlanner::set_hmi_behavior(const LateralBehavior& hmi_behavior) {
 }
 
 void BehaviorPlanner::set_autonomous_level(int level) {
+  // baseline 不限制等级范围，也不随等级切换清理既有 HMI 锁定状态。
   autonomous_level_ = level;
 }
 
 void BehaviorPlanner::set_aggressive_level(int level) {
+  // 等级在下一次 L3 RunOnce 中经 MultiModalForward::ParamLookUp 生效。
   aggressive_level_ = level;
 }
 
 void BehaviorPlanner::set_user_desired_velocity(const decimal_t desired_vel) {
+  // L0/L1 忽略外部速度设置；L2 以上仅执行非负截断。
   if (autonomous_level_ >= 2) {
     user_desired_velocity_ = std::max(desired_vel, 0.0);
   }
 }
 
 void BehaviorPlanner::set_use_sim_state(bool use_sim_state) {
+  // true 使用地图中的仿真自车状态判断 Lane，false 使用真实自车状态。
   use_sim_state_ = use_sim_state;
 }
 
 void BehaviorPlanner::set_sim_resolution(const decimal_t sim_resolution) {
+  // 直接覆盖离散步长，正值与有限性留给调用方保证。
   sim_resolution_ = sim_resolution;
 }
 
 void BehaviorPlanner::set_sim_horizon(const decimal_t sim_horizon) {
+  // 直接覆盖预测时域，后续 rollout 用 horizon/resolution 向下取整步数。
   sim_horizon_ = sim_horizon;
 }
 

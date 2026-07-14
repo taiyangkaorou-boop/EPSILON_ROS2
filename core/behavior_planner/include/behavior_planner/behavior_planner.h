@@ -39,27 +39,26 @@ class BehaviorPlanner : public Planner {
 
   /// 注入非拥有的地图接口裸指针。
   void set_map_interface(BehaviorPlannerMapItf* itf);
-  /**
-   * @brief set desired velocity
-   */
+
+  /// 在自动驾驶等级不低于 L2 时更新用户期望速度，并把负值截断为零。
   void set_user_desired_velocity(const decimal_t desired_vel);
 
-  /**
-   * @brief L2-level human-commanded lane changes
-   **/
+  /// 接收 HMI 横向行为：L2 立即写入行为，L3 仅锁定 MPDM 的横向 winner。
   void set_hmi_behavior(const LateralBehavior& hmi_behavior);
 
-  /**
-   * @brief set the level of autonomous driving
-   */
+  /// 直接设置自动驾驶等级；当前不校验取值范围。
   void set_autonomous_level(int level);
 
+  /// 设置 rollout 离散时间步长；当前不校验正值。
   void set_sim_resolution(const decimal_t sim_resolution);
 
+  /// 设置 rollout 预测时域；当前不校验正值。
   void set_sim_horizon(const decimal_t sim_horizon);
 
+  /// 选择使用仿真自车状态还是真实自车状态参与 Lane 归属判断。
   void set_use_sim_state(bool use_sim_state);
 
+  /// 设置 1--5 驾驶激进程度，下一次 L3 规划时映射为前向仿真参数。
   void set_aggressive_level(int level);
 
   /// 更新 RoutePlanner 的地图、自车状态和最近 Lane，并运行一次导航扩展。
@@ -68,22 +67,31 @@ class BehaviorPlanner : public Planner {
   /// 运行多行为评估并把 winner 写入 behavior_。
   ErrorType RunMpdm();
 
+  /// 返回当前 SemanticBehavior 的值拷贝。
   Behavior behavior() const;
 
+  /// 返回用户设置并经非负截断的期望速度。
   decimal_t user_desired_velocity() const;
 
+  /// 返回最终参考 Lane 曲率约束后的内部参考速度。
   decimal_t reference_desired_velocity() const;
 
+  /// 返回当前自动驾驶等级。
   int autonomous_level() const;
 
+  /// 返回本周期所有有效自车候选 rollout 的值拷贝。
   vec_E<vec_E<common::Vehicle>> forward_trajs() const;
 
+  /// 返回与 forward_trajs() 按下标对应的横向行为值拷贝。
   std::vector<LateralBehavior> forward_behaviors() const;
 
  protected:
+  /// 按最终横向行为选择目标 Lane，拟合局部参考线并更新曲率约束参考速度。
+  /// 相邻 Lane 不可用时回退当前 Lane 并把输出行为改为 LK。
   ErrorType ConstructReferenceLane(const LateralBehavior& lat_behavior,
                                    Lane* lane);
 
+  /// 以样本折线累计弦长为参数，用固定 20 个 break 和正则项拟合 Lane。
   ErrorType ConstructLaneFromSamples(const vec_E<Vecf<2>>& samples, Lane* lane);
 
   /// 生成可用 LK/LCL/LCR rollout，评估 winner 并输出速度命令。
@@ -91,14 +99,19 @@ class BehaviorPlanner : public Planner {
                                LateralBehavior* mpdm_behavior,
                                decimal_t* actual_desired_velocity);
 
+  /// 获取源 Lane 在 LK/LCL/LCR 下可观测到的直接目标 Lane 及其子 Lane ID。
   ErrorType GetPotentialLaneIds(const int source_lane_id,
                                 const LateralBehavior& beh,
                                 std::vector<int>* candidate_lane_ids);
+
+  /// 更新当前自车 Lane ID，并重建 LK/LCL/LCR 三组潜在 Lane 缓存。
   ErrorType UpdateEgoLaneId(const int new_ego_lane_id);
 
+  /// 根据旧 Lane 及潜在 Lane 缓存解释新观测 Lane 对应的横向行为。
   ErrorType JudgeBehaviorByLaneId(const int ego_lane_id_by_pos,
                                   LateralBehavior* behavior_by_lane_id);
 
+  /// 用观测横向行为推进 LK/LCL/LCR 状态机，并在换道结束或异常时解除 HMI 锁定。
   ErrorType UpdateEgoBehavior(const LateralBehavior& behavior_by_lane_id);
 
   /// 在固定参考车道上同步滚动自车与周车，并记录各车完整预测轨迹。
@@ -173,15 +186,19 @@ class BehaviorPlanner : public Planner {
   ErrorType GetDesiredVelocityOfTrajectory(
       const vec_E<common::Vehicle> vehicle_vec, decimal_t* vel);
 
+  // 外部注入且不由本类释放的地图接口。
   BehaviorPlannerMapItf* map_itf_{nullptr};
   Behavior behavior_;
 
+  // Init 中动态创建并由当前类长期持有的导航 RoutePlanner。
   planning::RoutePlanner* p_route_planner_{nullptr};
 
+  // 用户速度上限与最终参考 Lane 曲率约束后的内部参考速度。
   decimal_t user_desired_velocity_{5.0};
   decimal_t reference_desired_velocity_{5.0};
   int autonomous_level_{3};
 
+  // 前向 rollout 的离散参数、驾驶风格等级及对应车辆传播参数。
   decimal_t sim_resolution_{0.4};
   decimal_t sim_horizon_{4.0};
   int aggressive_level_{3};
@@ -191,13 +208,13 @@ class BehaviorPlanner : public Planner {
   bool lock_to_hmi_ = false;
   LateralBehavior hmi_behavior_ = LateralBehavior::kLaneKeeping;
 
-  // track the ego lane id
+  // 当前 Lane 与基于其拓扑预计算的同向、左换道和右换道可观测 Lane 集合。
   int ego_lane_id_{kInvalidLaneId};
   int ego_id_;
   std::vector<int> potential_lcl_lane_ids_;
   std::vector<int> potential_lcr_lane_ids_;
   std::vector<int> potential_lk_lane_ids_;
-  // debug
+  // 本周期有效候选及周车联合 rollout，既用于行为输出也用于调试可视化。
   vec_E<vec_E<common::Vehicle>> forward_trajs_;
   std::vector<LateralBehavior> forward_behaviors_;
   vec_E<std::unordered_map<int, vec_E<common::Vehicle>>> surround_trajs_;
