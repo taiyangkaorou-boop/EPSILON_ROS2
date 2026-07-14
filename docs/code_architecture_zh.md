@@ -71,7 +71,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.2b2a `core/common` 多项式、基础样条与边界逆矩阵查找表。
 - [x] M0.2b2b `core/common` Bezier 曲线与分段 Bezier 样条。
 - [x] M0.2b2c1 `core/common` SplineGenerator 插值、拟合与状态连接。
-- [ ] M0.2b2c2 `core/common` 带参考接近项的 Bezier corridor QP。
+- [x] M0.2b2c2 `core/common` 带参考接近项的 Bezier corridor QP。
 - [ ] M0.2b2c3 `core/common` 基础 Bezier corridor QP。
 - [ ] M0.2b3 `core/common` 轨迹表示与生成。
 - [ ] M0.2c `core/common` 求解器、安全模型、车辆行为模型与可视化。
@@ -273,3 +273,24 @@ SSC map adapter 明确填充，不能因为障碍物本身没有时间字段就�
 参数/断点排序和覆盖关系、正分段时长、非负正则或输出指针；共享断点样本归入左段，
 最后断点外样本可能形成未填充的观测行。State 两个入口仅用 assert 检查数量一致，release
 构建中不安全，且非递增参数会触发 `Polynomial` 的近零/负时长退化与缓存不同步问题。
+
+## 17. M0.2b2c2：带参考接近项的 Bezier corridor QP
+
+该入口把每个维度、每个走廊分段的 `N_DEG+1` 个时间缩放 Bernstein 控制变量按
+“维度--分段--控制点”顺序堆叠，并分五阶段求解：
+
+1. 以分段时长的负三次方缩放五次 Bezier jerk 平方积分 Hessian；在离散参考时间戳
+   处展开位置平方误差，形成额外二次矩阵与线性项；
+2. 施加相邻段端点连续性及首末位置/速度/加速度等式边界；
+3. 通过位置控制点、一阶差分控制点和二阶差分控制点的盒约束，利用 Bezier 凸包性质
+   保证整段位置、速度和加速度处于 cube 上下界内；
+4. 调用 OOQP 求解带双边不等式的二次规划；
+5. 以首 cube 下界和各 cube 上界构造参数域，并把解向量回填为 `BezierSpline`。
+
+已确认的后续修复/验证点：代码把 `num_continuity` 设为 3，实际只保证 C2（位置、速度、
+加速度）连续，虽然保留了 jerk 分支和“连续到 jerk”的旧注释；这会直接影响跨 cube
+舒适性指标。入口未检查空走廊、正且连续的 cube 时域、上下界顺序、输出指针、参考
+时间戳与参考点数量一致或非负接近权重。内部断点参考样本选右段，而样条求值选左段。
+首末约束数组超过三项时会分配额外全零等式行；全局参数域忽略后续 cube 的 `t_lb`，
+所以时间不连续时优化尺度与回填求值尺度不一致。凸包盒约束是充分但可能保守的安全
+条件，后续实验需区分“QP 不可行”与“真实连续轨迹不可行”。
