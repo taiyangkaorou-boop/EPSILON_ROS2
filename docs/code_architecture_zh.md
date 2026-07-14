@@ -91,7 +91,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.3b2b 多车前向 rollout 与碰撞筛选。
 - [x] M0.3b2c 安全/效率/行为代价评估。
 - [x] M0.3b2d 参考 Lane、Lane ID 状态机与参数访问器。
-- [ ] M0.3b3 BehaviorPlanner ROS 服务与可视化。
+- [x] M0.3b3 BehaviorPlanner ROS 服务与可视化。
 - [ ] M0.3c SemanticMapManager 支撑组件与主类。
 - [ ] M0.4 SSC、车辆模型、物理仿真、playground 与配置。
 - [ ] M0.5 全仓覆盖审计和遗漏补齐。
@@ -693,3 +693,23 @@ Lane 状态机事件和恢复策略，并统一 setter、拓扑查询和数值�
 失败；Init/规划/回调返回码大多被忽略，规划失败仍回调旧行为并发布旧轨迹。空回调也可
 被标记为已绑定。M1 应改为有生命周期的 timer/jthread 或 executor callback group，增加
 队列丢帧指标、线程安全配置快照、输入校验和明确的失败输出语义。
+
+## 38. M0.3b3b：BehaviorPlanner 候选轨迹可视化
+
+- `BehaviorPlannerVisualizer` 共享 ROS2 Node，并非拥有地引用同一 server 内的规划器；
+  `Init` 为每个 ego 创建 `/vis/agent_<id>/forward_trajs` MarkerArray publisher，QoS 深度 1；
+- 发布时值拷贝全部有效自车候选 rollout。每个状态生成一个 z=0.3 m、尺寸
+  0.5×0.5×0.1 m 的金色圆柱，每条候选再生成一条宽 0.1 m 的金色 LineStrip；
+- `FillHeaderIdInMarkerArray` 将所有 Marker 统一写入 `map` frame、赋予给定 ROS 时间戳和
+  从零连续 ID；若新帧 Marker 更少，则为上一帧多出的 ID 追加 DELETE Marker。可视化器
+  只记录填充前的 ADD 数量，因此删除消息不会污染下一帧计数。
+
+已确认的后续修复/验证点：构造和 Init 不检查 node/规划器指针，未 Init 就发布会解引用
+空 publisher；`cmap.at("gold")` 依赖固定键存在。规划器 getter 先深拷贝全部轨迹，可视化
+又为每个状态分配独立 Cylinder Marker，消息大小和 CPU/内存开销随候选数×时域采样点
+线性增长。所有候选同色、同 namespace，未标注行为类型、代价或 winner，也不显示周车
+rollout、安全裕量和碰撞点；帧名、topic、颜色、尺寸和 z 高度全部硬编码，轨迹自身时间戳
+未使用。Marker 构造和 header 填充错误码均被忽略，空轨迹仍追加空 LineStrip。原文件头
+保护宏命名为 ROS_ADAPTER 而非 VISUALIZER，且包含多项未使用的 tf2/vehicle_msgs 头；
+package.xml/CMake 对直接依赖的声明也不完整，当前可能依赖传递 include/link。M1/构建
+配置审计应补齐依赖和空值契约，并采用抽样折线、行为分色、winner 强调及可选风险图层。
