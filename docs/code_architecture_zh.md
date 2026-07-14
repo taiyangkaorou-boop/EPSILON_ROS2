@@ -65,7 +65,8 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.2a3b1 `semantics` GridMapMetaInfo/GridMapND。
 - [x] M0.2a3b2 `semantics` 车道、障碍物与 KD-tree 适配。
 - [x] M0.2a3c `semantics` SSC cube/corridor、交通信号与枚举工具。
-- [ ] M0.2a4 `core/common` 状态与车道类型。
+- [x] M0.2a4a `core/common` State/FreeState/FrenetState/Waypoint/StateTransformer。
+- [ ] M0.2a4b `core/common` Lane 与 LaneGenerator。
 - [ ] M0.2b `core/common` 数学、样条、轨迹与圆弧。
 - [ ] M0.2c `core/common` 求解器、安全模型、车辆行为模型与可视化。
 - [ ] M0.3 语义地图、前向仿真、预测和行为规划。
@@ -163,3 +164,18 @@ SSC map adapter 明确填充，不能因为障碍物本身没有时间字段就�
 已确认的后续修复/验证点：`TrafficLight::type_` 默认未初始化；交通信号 setter 不检查
 区间顺序；`GetVehicleVertices` 会向输出容器追加而不清空；车辆尺寸膨胀允许得到非正
 尺寸。这些问题不能在纯注释标签内修改，将进入 baseline 静态修复清单。
+
+## 11. M0.2a4a：状态表示与坐标转换
+
+- `State` 表示车辆后轴中心处的世界位姿、标量速度/加速度、曲率和转向角；
+- `FreeState` 把速度和加速度展开为世界 x/y 向量，转回 `State` 时速度取模，不能恢复
+  倒车速度符号；
+- `FrenetState` 同时保存 `[s,s_dot,s_ddot]`、d 对时间导数和 d 对弧长导数；当
+  `s_dot` 接近零时，时间导数无法稳定转换为弧长导数；
+- `StateTransformer` 按值持有参考 `Lane`，使用车道投影、切向、曲率和曲率导数完成
+  世界/Frenet 状态转换；
+- `Waypoint` 表达轨迹位置到 jerk 的可选硬约束及可选时间戳。
+
+批量转换接口采用 fail-fast，但失败前已经写入的输出前缀不会回滚；世界到 Frenet 的
+弧长投影使用有限采样，并以 0.5 m 切向偏差作为拒绝阈值。后续连续性和投影鲁棒性
+实验必须显式记录这些近似，而不能把转换失败静默当作有效轨迹。
