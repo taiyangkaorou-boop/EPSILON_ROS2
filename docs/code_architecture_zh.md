@@ -84,7 +84,8 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.2c5c `core/common` Mesh、箭头、线条、文本与车辆 Marker。
 - [x] M0.2c5d `core/common` 障碍物、SemanticBehavior 与 GridMap 可视化。
 - [x] M0.3a1 OnLaneFsPredictor 与驾驶风格参数查表。
-- [ ] M0.3a2 OnLaneForwardSimulation 单步/多步传播。
+- [x] M0.3a2a 目标车道间隙状态与高级 LK/LC 单步传播。
+- [ ] M0.3a2b 标准单步传播、控制器辅助函数与车辆模型积分。
 - [ ] M0.3b BehaviorPlanner 地图接口、适配器与规划主类。
 - [ ] M0.3c SemanticMapManager 支撑组件与主类。
 - [ ] M0.4 SSC、车辆模型、物理仿真、playground 与配置。
@@ -513,3 +514,20 @@ ROS row-major 宽度语义转置；只使用第 0 维分辨率，T 到 int8 数�
 声明没有定义，实例化对象会有链接风险。参数查表只覆盖 Param 子集，非法等级仅 assert，
 release 中仍返回成功且保持旧参数；当前仓库没有实际调用 `MultiModalForward` 的位置。
 这些限制说明 baseline 的周车预测还不是带持续驾驶风格 belief 的真正多模态模型。
+
+## 30. M0.3a2a：目标间隙状态与高级 LK/LC 传播
+
+- `Param` 汇总 IDM、Pure Pursuit 前视距离、横纵向加速度/jerk、曲率、转角和转角率
+  限制，并可在横向失败时把期望速度降为零；
+- `GetTargetStateOnTargetLane` 把自车和目标间隙前后车投影到目标 Lane，以保险杠位置、
+  最小间距和时距构造前后阈值，再用硬编码位置误差增益生成目标 s/v；
+- AdvancedLK 在同一 Lane 上追踪横向 offset，并按真实/虚拟前车执行 IDM；
+- AdvancedLC 横向追踪目标 Lane，纵向用 Context-IDM 融合当前 Lane 前车与目标间隙
+  期望状态；两者最终都交给 IdealSteerModel 施加动力学限制并积分。
+
+已确认的后续修复/验证点：间隙调节增益、速度修正范围和 Context-IDM 权重均硬编码，
+目标状态不继承时间戳；前后速度参考区间可能倒置但未验证。高级 LK 中自车投影失败后
+仍可能在前车投影成功时使用无效 `current_fs` 做 IDM。高级 LC 对目标/当前 Lane 多个
+投影错误使用空分支，随后继续读取输出；其 Context-IDM `current_pos` 取目标 Lane s，
+而 leading/target_pos 取当前 Lane s，除非两 Lane 参数化严格一致，否则混用了坐标。
+所有辅助函数返回码基本被忽略，入口也不验证正 dt、轴距和参数有限性却固定返回成功。
