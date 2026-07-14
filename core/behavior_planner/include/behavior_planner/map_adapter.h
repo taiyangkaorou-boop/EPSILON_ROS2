@@ -7,8 +7,15 @@
 
 namespace planning {
 
+/**
+ * @brief 将 SemanticMapManager 适配为 BehaviorPlannerMapItf 的薄转发层。
+ *
+ * 适配器通过 shared_ptr 共享地图生命周期，统一在未初始化时返回 kWrongStatus；少数
+ * 查询还会复制/筛选 SemanticLaneSet 或补充有效性检查。
+ */
 class BehaviorPlannerMapAdapter : public BehaviorPlannerMapItf {
  public:
+  /// 底层集成语义地图类型。
   using IntegratedMap = semantic_map_manager::SemanticMapManager;
   bool IsValid() override;
   ErrorType GetEgoState(State *state) override;
@@ -60,10 +67,13 @@ class BehaviorPlannerMapAdapter : public BehaviorPlannerMapItf {
   ErrorType GetPredictedBehavior(
       const int vehicle_id, common::LateralBehavior *lat_behavior) override;
 
+  /// 设置底层地图共享指针并把适配器标记为有效；当前不拒绝空指针。
   void set_map(std::shared_ptr<IntegratedMap> map_ptr);
 
  private:
+  /// 共享持有 SemanticMapManager。
   std::shared_ptr<IntegratedMap> map_;
+  /// 由 set_map 单向置真，不随指针内容重新验证。
   bool is_valid_ = false;
 };
 

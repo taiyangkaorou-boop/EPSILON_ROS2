@@ -2,26 +2,31 @@
 
 namespace planning {
 
+// 返回 set_map 维护的浅层有效标记。
 bool BehaviorPlannerMapAdapter::IsValid() { return is_valid_; }
 
+// 复制底层自车当前状态。
 ErrorType BehaviorPlannerMapAdapter::GetEgoState(State *state) {
   if (!is_valid_) return kWrongStatus;
   *state = map_->ego_vehicle().state();
   return kSuccess;
 }
 
+// 返回底层地图保存的自车 ID。
 ErrorType BehaviorPlannerMapAdapter::GetEgoId(int *id) {
   if (!is_valid_) return kWrongStatus;
   *id = map_->ego_id();
   return kSuccess;
 }
 
+// 复制完整自车对象。
 ErrorType BehaviorPlannerMapAdapter::GetEgoVehicle(common::Vehicle *vehicle) {
   if (!is_valid_) return kWrongStatus;
   *vehicle = map_->ego_vehicle();
   return kSuccess;
 }
 
+// 用自车三自由度状态委托最近 Lane 查询，只返回 Lane ID。
 ErrorType BehaviorPlannerMapAdapter::GetEgoLaneIdByPosition(
     const std::vector<int> &navi_path, int *lane_id) {
   if (!is_valid_) {
@@ -37,7 +42,6 @@ ErrorType BehaviorPlannerMapAdapter::GetEgoLaneIdByPosition(
                    map_->ego_vehicle().state().vec_position(1),
                    map_->ego_vehicle().state().angle);
   std::set<std::tuple<decimal_t, decimal_t, int>> dist_set;
-
   if (map_->GetNearestLaneIdUsingState(state_3dof, navi_path, &ego_lane_id,
                                        &distance_to_lane,
                                        &arc_len) != kSuccess) {
@@ -49,6 +53,7 @@ ErrorType BehaviorPlannerMapAdapter::GetEgoLaneIdByPosition(
   return kSuccess;
 }
 
+// 透传最近 Lane、横向距离和投影弧长查询。
 ErrorType BehaviorPlannerMapAdapter::GetNearestLaneIdUsingState(
     const Vec3f &state, const std::vector<int> &navi_path, int *id,
     decimal_t *distance, decimal_t *arc_len) {
@@ -65,6 +70,7 @@ ErrorType BehaviorPlannerMapAdapter::GetNearestLaneIdUsingState(
   return kSuccess;
 }
 
+// 透传车道到导航路径的拓扑可达性及换道次数。
 ErrorType BehaviorPlannerMapAdapter::IsTopologicallyReachable(
     const int lane_id, const std::vector<int> &path, int *num_lane_changes,
     bool *res) {
@@ -80,6 +86,7 @@ ErrorType BehaviorPlannerMapAdapter::IsTopologicallyReachable(
   return kSuccess;
 }
 
+// 从复制出的 SemanticLaneSet 查询右换道可用性和目标 ID。
 ErrorType BehaviorPlannerMapAdapter::GetRightLaneId(const int lane_id,
                                                     int *r_lane_id) {
   if (!is_valid_) return kWrongStatus;
@@ -97,6 +104,7 @@ ErrorType BehaviorPlannerMapAdapter::GetRightLaneId(const int lane_id,
   return kSuccess;
 }
 
+// 从 SemanticLaneSet 查询左换道可用性和目标 ID。
 ErrorType BehaviorPlannerMapAdapter::GetLeftLaneId(const int lane_id,
                                                    int *l_lane_id) {
   if (!is_valid_) return kWrongStatus;
@@ -114,6 +122,7 @@ ErrorType BehaviorPlannerMapAdapter::GetLeftLaneId(const int lane_id,
   return kSuccess;
 }
 
+// 按 ID 复制连续 Lane，并额外拒绝无效几何。
 ErrorType BehaviorPlannerMapAdapter::GetLaneByLaneId(const int lane_id,
                                                      Lane *lane) {
   if (!is_valid_) return kWrongStatus;
@@ -130,6 +139,7 @@ ErrorType BehaviorPlannerMapAdapter::GetLaneByLaneId(const int lane_id,
   return kSuccess;
 }
 
+// 覆盖输出为指定 Lane 的纵向后继 ID 列表。
 ErrorType BehaviorPlannerMapAdapter::GetChildLaneIds(
     const int lane_id, std::vector<int> *child_ids) {
   if (!is_valid_) return kWrongStatus;
@@ -138,12 +148,13 @@ ErrorType BehaviorPlannerMapAdapter::GetChildLaneIds(
   if (it == semantic_lane_set.semantic_lanes.end()) {
     return kWrongStatus;
   } else {
-    // ~ note this is an assign
+    // 使用 assign 覆盖调用方旧内容。
     child_ids->assign(it->second.child_id.begin(), it->second.child_id.end());
   }
   return kSuccess;
 }
 
+// 覆盖输出为指定 Lane 的纵向前驱 ID 列表。
 ErrorType BehaviorPlannerMapAdapter::GetFatherLaneIds(
     const int lane_id, std::vector<int> *father_ids) {
   if (!is_valid_) return kWrongStatus;
@@ -158,6 +169,7 @@ ErrorType BehaviorPlannerMapAdapter::GetFatherLaneIds(
   return kSuccess;
 }
 
+// 透传局部参考线离散样本截取。
 ErrorType BehaviorPlannerMapAdapter::GetLocalLaneSamplesByState(
     const State &state, const int lane_id, const std::vector<int> &navi_path,
     const decimal_t max_reflane_dist, const decimal_t max_backward_dist,
@@ -171,6 +183,7 @@ ErrorType BehaviorPlannerMapAdapter::GetLocalLaneSamplesByState(
   return kSuccess;
 }
 
+// 透传按横向行为构造参考 Lane，并验证返回几何有效性。
 ErrorType BehaviorPlannerMapAdapter::GetRefLaneForStateByBehavior(
     const State &state, const std::vector<int> &navi_path,
     const LateralBehavior &behavior, const decimal_t &max_forward_len,
@@ -187,6 +200,7 @@ ErrorType BehaviorPlannerMapAdapter::GetRefLaneForStateByBehavior(
   return kSuccess;
 }
 
+// 透传参考 Lane 上的前车查询。
 ErrorType BehaviorPlannerMapAdapter::GetLeadingVehicleOnLane(
     const common::Lane &ref_lane, const common::State &ref_state,
     const common::VehicleSet &vehicle_set, const decimal_t &lat_range,
@@ -200,22 +214,23 @@ ErrorType BehaviorPlannerMapAdapter::GetLeadingVehicleOnLane(
   return kSuccess;
 }
 
+// 当前没有二次筛选策略，直接复制全部 surrounding_vehicles。
 ErrorType BehaviorPlannerMapAdapter::GetKeyVehicles(
     common::VehicleSet *key_vehicle_set) {
   if (!is_valid_) return kWrongStatus;
-  // TODO: (@denny.ding) add vehicle selection strategy here
   *key_vehicle_set = map_->surrounding_vehicles();
   return kSuccess;
 }
 
+// 直接复制 SemanticMapManager 已筛选/渲染的 semantic_key_vehicles。
 ErrorType BehaviorPlannerMapAdapter::GetKeySemanticVehicles(
     common::SemanticVehicleSet *key_vehicle_set) {
   if (!is_valid_) return kWrongStatus;
-  // TODO: (@denny.ding) add vehicle selection strategy here
   *key_vehicle_set = map_->semantic_key_vehicles();
   return kSuccess;
 }
 
+// 复制完整 LaneNet。
 ErrorType BehaviorPlannerMapAdapter::GetWholeLaneNet(
     common::LaneNet *lane_net) {
   if (!is_valid_) return kWrongStatus;
@@ -223,6 +238,7 @@ ErrorType BehaviorPlannerMapAdapter::GetWholeLaneNet(
   return kSuccess;
 }
 
+// 透传两个显式车辆状态之间的碰撞检查。
 ErrorType BehaviorPlannerMapAdapter::CheckCollisionUsingState(
     const common::VehicleParam &param_a, const common::State &state_a,
     const common::VehicleParam &param_b, const common::State &state_b,
@@ -235,6 +251,7 @@ ErrorType BehaviorPlannerMapAdapter::CheckCollisionUsingState(
   return kSuccess;
 }
 
+// 检查给定车辆状态与环境碰撞；baseline 忽略底层错误码并固定返回成功。
 ErrorType BehaviorPlannerMapAdapter::CheckIfCollision(
     const common::VehicleParam &vehicle_param, const State &state, bool *res) {
   if (!is_valid_) return kWrongStatus;
@@ -242,6 +259,7 @@ ErrorType BehaviorPlannerMapAdapter::CheckIfCollision(
   return kSuccess;
 }
 
+// 透传 Lane/状态相关速度限制查询。
 ErrorType BehaviorPlannerMapAdapter::GetSpeedLimit(const State &state,
                                                    const Lane &lane,
                                                    decimal_t *speed_limit) {
@@ -252,6 +270,7 @@ ErrorType BehaviorPlannerMapAdapter::GetSpeedLimit(const State &state,
   return kSuccess;
 }
 
+// 从语义周车集合按 ID 读取横向预测；缺失 ID 时 unordered_map::at 会抛异常。
 ErrorType BehaviorPlannerMapAdapter::GetPredictedBehavior(
     const int vehicle_id, common::LateralBehavior *lat_behavior) {
   if (!is_valid_) return kWrongStatus;
@@ -262,6 +281,7 @@ ErrorType BehaviorPlannerMapAdapter::GetPredictedBehavior(
   return kSuccess;
 }
 
+// 保存共享地图指针并无条件置有效，空指针也会通过 IsValid。
 void BehaviorPlannerMapAdapter::set_map(
     std::shared_ptr<IntegratedMap> map_ptr) {
   map_ = map_ptr;

@@ -86,7 +86,9 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.3a1 OnLaneFsPredictor 与驾驶风格参数查表。
 - [x] M0.3a2a 目标车道间隙状态与高级 LK/LC 单步传播。
 - [x] M0.3a2b 标准单步传播、控制器辅助函数与车辆模型积分。
-- [ ] M0.3b BehaviorPlanner 地图接口、适配器与规划主类。
+- [x] M0.3b1 BehaviorPlannerMapItf 与 SemanticMapManager 适配器。
+- [ ] M0.3b2 BehaviorPlanner 核心候选生成、评估与决策。
+- [ ] M0.3b3 BehaviorPlanner ROS 服务与可视化。
 - [ ] M0.3c SemanticMapManager 支撑组件与主类。
 - [ ] M0.4 SSC、车辆模型、物理仿真、playground 与配置。
 - [ ] M0.5 全仓覆盖审计和遗漏补齐。
@@ -549,3 +551,19 @@ release 中仍返回成功且保持旧参数；当前仓库没有实际调用 `M
 Pure Pursuit 不检查零世界前视距离；角度归一化只回绕一次。虚拟前车距离
 `100+100*v` 对足够负速度可落到后方。所有控制器/车辆模型错误码、输出指针、dt、轴距
 和有限性均未检查，入口固定成功；辅助函数名称还长期保留 `Calcualate` 拼写错误。
+
+## 32. M0.3b1：行为规划地图抽象与语义地图适配器
+
+- `BehaviorPlannerMapItf` 把规划器所需能力限制为自车、最近 Lane/拓扑、参考 Lane、
+  关键周车、碰撞、前车、限速和预测行为查询，使规划核心不直接依赖地图内部容器；
+- `BehaviorPlannerMapAdapter` 通过 shared_ptr 共享 SemanticMapManager，并在大多数入口
+  先检查自身有效标记，再转发或复制结果；
+- 左右 Lane 查询额外检查换道可用性，Lane/参考 Lane 查询验证连续几何有效；父子 Lane
+  输出使用 assign 覆盖旧内容；关键原始车辆当前直接等于全部 surrounding_vehicles。
+
+已确认的后续修复/验证点：接口含大量虚函数却没有虚析构，经基类指针销毁派生对象
+不安全；所有接口均非常量且使用裸输出指针。`set_map` 不检查 nullptr 就把 is_valid_ 置
+真，后续会解引用空指针；有效标记也不随地图状态更新。多次车道查询会复制完整
+SemanticLaneSet；两个最近 Lane 函数各保留未使用的 `dist_set`。`CheckIfCollision` 忽略
+底层错误码，`GetPredictedBehavior` 用 `.at(vehicle_id)`，缺失 ID 会抛异常而不是返回
+ErrorType。M1 应统一空指针/异常边界并增加 const、虚析构和轻量只读视图。
