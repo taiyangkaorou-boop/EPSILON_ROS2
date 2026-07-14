@@ -130,6 +130,10 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.5a1 EUDM DCP tree 与公共 Task/LaneChangeInfo 接口。
 - [x] M0.5a2 EUDM 地图接口与 SemanticMapManager 适配器。
 - [ ] M0.5a3 EUDM 规划核心。
+- [x] M0.5a3a EUDM 公共类型、接口与状态所有权。
+- [ ] M0.5a3b EUDM 配置、动作转换与周期编排。
+- [ ] M0.5a3c EUDM 场景/动作层/积分步前向仿真。
+- [ ] M0.5a3d EUDM 代价、RSS 与严格安全评价。
 - [ ] M0.5a4 EUDM manager、ROS server 与 visualizer。
 - [ ] M0.5a5 EUDM proto、CMake 与 package 元数据。
 - [ ] M0.5b ai_agent planner 与 launch/build。
@@ -1604,3 +1608,31 @@ beam search 生成可表达多阶段交互但规模可控的脚本，并为 H=0/
 绕过接口有效性和错误语义。M1 应补虚析构、非空/有效性契约、override 和精确错误码，统一
 const/read-only 地图快照接口；将 Lane 连续性改为带明确距离/深度预算且可测试的拓扑查询，并对
 空 map、空输出指针、超过 20 节点的链/分叉、失败输出保持、复制开销建立单元与基准测试。
+
+## 68. M0.5a3a：EUDM 规划核心公共类型与状态所有权
+
+- EudmPlanner 继承通用 Planner，输入为 EudmManager 注入的地图接口、用户期望速度、换道
+  约束/推荐和 DCP ongoing action；输出为胜出候选索引/分数以及全部候选的动作、有效性、风险、
+  分项代价、自车/周车轨迹和逐层纵横向行为；
+- LatSimMode 将整条横向序列分成始终保持、先保持后换道、始终换道、换道后取消四类；
+  ForwardSimEgoAgent 按场景级保存序列模式和动力学参数、按动作层保存当前/目标/长期 Lane 与
+  gap ID、按积分步保存车辆状态；ForwardSimAgent 保存周车 IDM、预测横向行为和参考 Lane；
+- CostStructure 按动作层聚合效率（自车速度差/前车阻塞）、安全（RSS/占用 Lane）和导航
+  （换道/取消/推荐）分项，ave() 将三类代价相加后乘动作时长与折扣权重；
+- 私有调用链划分为配置/动作翻译、候选线程容器、场景与动作层设置、单步多车传播、严格碰撞与
+  RSS 评价、候选汇总；EudmManager 会逐项按值读取轨迹和代价并构造 Snapshot。
+
+已确认的后续修复/验证点：dcp_tree_ptr_ 没有类内初始化，Init 直接 new 且类没有析构释放；重复
+Init 会泄漏，Init 前调用 action_script/UpdateDcpTree 会解引用不确定指针，默认复制类实例还会
+共享这个裸指针。应改为 std::unique_ptr<DcpTree>，显式定义构造/移动语义并让 Init 可重复调用。
+ForwardSimEgoAgent 的 lat_range、seq_lat_mode、seq_lat_behavior、is_cancel_behavior、target_gap_ids，
+ForwardSimAgent::lat_range、CostStructure::valid_sample_index_ub 以及 planner 的 time_stamp_/ego_id_
+均无默认值；主路径虽多会在使用前赋值，但错误/早退或新增调用路径容易读取未初始化状态。
+behavior() 和 UpdateEgoBehavior() 只有声明没有定义，调用即产生链接错误；winner_action_seq_ 从未
+写入，getter 始终返回空缓存；tail_cost_ 也没有实际计算/写入，末端代价接口名存实亡。头文件
+include guard 仍误用 BEHAVIOR_PLANNER。几乎所有结果 getter 都按值深拷贝，Manager 一次 SaveSnapshot
+连续复制全部候选的多车长轨迹和嵌套容器，候选数、周车数和时域增加时内存带宽/周期抖动明显；
+sim_res/risky_res 还逐项重建 vector<bool>。所有私有输出仍用裸指针且无非空契约。M1 应建立明确
+构造后不变量和 initialized 状态，补齐或删除悬空 API，用 const 引用/只读 Snapshot move 交接结果，
+并为未 Init、重复 Init、复制/移动、缺失符号、空 winner/tail、未初始化结构及大规模结果复制做
+编译链接测试、单元测试和内存/时延基准。
