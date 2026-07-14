@@ -77,7 +77,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.2c1 `core/common` 加权最小二乘 QP 与 OOQP/MA27 接口。
 - [x] M0.2c2 `core/common` RSS 安全距离、速度区间与车辆检查。
 - [x] M0.2c3a `core/common` IDM、IIDM 与 ACC 纵向模型。
-- [ ] M0.2c3b `core/common` MOBIL 换道收益与横向行为概率。
+- [x] M0.2c3b `core/common` MOBIL 换道收益与横向行为概率。
 - [ ] M0.2c4 `core/common` FrenetPrimitive。
 - [ ] M0.2c5 `core/common` 可视化工具。
 - [ ] M0.3 语义地图、前向仿真、预测和行为规划。
@@ -381,3 +381,25 @@ release 下短输入会越界，且改系数不更新有效标记或端状态。
 Inf，IIDM 虽做幅值截断但 NaN 不一定被修复。ACC 的 CAH 分母在前车速度和间距同时为
 零时为零，且其 ds 未扣除 Param 中的固定车长，与 IDM 净间距定义不一致；coolness
 也不可配置。M1 需添加有限性回退、统一净间距和边界工况单元测试。
+
+## 23. M0.2c3b：简化 MOBIL 换道收益与行为概率
+
+- `MobilLaneChangingModel` 计算自车 c、原车道后车 o、目标车道后车 n 在换道前后的
+  IDM/ACC 加速度；缺少真实前车时使用同速远端虚拟前车；
+- 目标车道先用第 21 节的点质量 RSS 分别检查投影自车与前/后车，两个方向均安全才
+  计算换道后加速度；
+- `MobilBehaviorPrediction` 固定接收 `[当前,左,右]` 三条 Lane，分别计算左右收益，
+  再把安全方向的收益从 `[-1,6]` 截断映射为 LK/LCL/LCR 启发式分布；
+- 近似静止车辆直接给 LK=1，无有效目标车道时相应换道概率为零。
+
+当前实现与标准 MOBIL 有明显差异：`politeness_coeff` 硬编码为 0，虽然计算了新/旧后车
+加速度变化，最终收益只保留自车加速度改善；没有换道收益阈值、方向偏置或安全制动
+阈值参数，负收益只要高于 -1 仍可映射为非零换道概率。IDM 期望速度被设为各车当前
+速度，车辆长度使用 IDM 固定 5 m，而不是传入 Vehicle 尺寸。因此输出是未标定启发式
+分数，不是可解释行为概率。
+
+工程风险包括：只检查 lanes 数量，不检查四组邻车/状态数组长度；`nearby_vehicles`
+完全未使用；Lane 投影和目标车道模型返回码被忽略。RSS 安全门即使邻车 ID 无效也会
+检查对应 FrenetState，缺失邻车的默认状态可能误判；近似静止后车被当作不存在。目标
+车道不安全时三个加速度输出不写值；每辆车每周期无条件打印收益。上述问题是后续
+BR-EUDM 用持续 belief 与交互 rollout 替代单帧 MOBIL 启发式的重要 baseline 依据。
