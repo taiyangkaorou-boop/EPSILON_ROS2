@@ -140,6 +140,8 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.5a4c EUDM ROS2 server 与 visualizer。
 - [x] M0.5a5 EUDM proto、CMake 与 package 元数据。
 - [ ] M0.5b ai_agent planner 与 launch/build。
+- [x] M0.5b1 ai_agent MPDM、单步控制与可视化入口。
+- [ ] M0.5b2 ai_agent ROS2/legacy launch 与构建元数据。
 - [ ] M0.5c route_planner、vehicle_msgs 与公共 Planner 接口遗漏。
 - [ ] M0.5d 第一方包构建元数据补注释。
 - [ ] M0.5e 全仓函数/文件覆盖复核与 M0 结束标签。
@@ -1871,3 +1873,32 @@ ament export targets，增加 build/install consumer test、textproto parse/rang
 
 至此 M0.5a 全部完成：EUDM 动作树、地图、核心仿真/评价、manager/HMI、ROS2 集成、配置和构建均已
 形成逐文件中文职责、调用链和静态缺陷索引。M0.5b 将转向 util/ai_agent_planner。
+
+## 76. M0.5b1：AI agent 的 MPDM 行为规划与单步控制闭环
+
+- onlane_ai_agent 为仿真交通参与者可执行程序：SemanticMap RosAdapter 产生原始地图，回调送入
+  BehaviorPlannerServer；行为回调把带参考 Lane/行为的地图写入容量 100 的控制队列；主线程 50 Hz
+  清空队列只保留最新地图，用 OnLaneForwardSimulation::PropagateOnce 生成下一控制状态并发布 ctrl；
+- 控制速度取 MPDM reference_desired_velocity，并受 ego_behavior.ref_lane 的地图限速约束；前车按
+  固定 2.2 m 横向范围搜索。车辆尺寸/环境使用最新地图，但自车状态只在首帧从真实 ego 初始化，
+  此后使用上一控制输出 desired_state 滚动；
+- MultiModalForward::ParamLookUp 根据 aggressiveness_level 初始化 IDM/运动学传播参数；
+  autonomous_level、aggressiveness、desired velocity 注入 MPDM；语义地图可视化和 TF 以 20 Hz 发布；
+- RandomBehavior 设计为每 2000 次调用采样 [-2,5] m/s 速度扰动，但主循环没有调用，因此默认所有
+  agent 的 desired velocity 不会产生该随机异质性。
+
+已确认的后续修复/验证点：文件级 desired_vel/aggressiveness_level 被 main 同名局部变量遮蔽；全局
+desired_vel 虽静态零初始化，但 RandomBehavior 若未来启用会围绕 0 而非参数速度采样。RandomBehavior
+本身无调用、cnt 与噪声无参数/seed 暴露，高分辨率时间播种也不可复现实验。declare autonomous_level
+错误使用 aggressiveness_level 变量作默认值；参数随后重复 get 两次，缺少 ID、等级、速度和配置路径
+校验，make_shared 后的 nullptr 检查无意义。BehaviorPlanner 使用 detached 线程更新 reference speed，
+主线程无同步读取，可能 data race；两个 ReaderWriterQueue 的 enqueue 失败均忽略。PublishControl
+只首帧校正真实状态，长期 desired_state 开环会与物理 simulator/地图 ego 漂移，导致前车距离、Lane
+投影和控制状态不在同一观测时刻。delta_t 只处理大于 2 s 的正跳变，负/零/NaN 和中等大间隔不处理；
+首次 last_smm 默认时间戳也影响步长。参考 Lane/前车查询失败被吞，invalid/空 Lane 仍传入传播器；
+ParamLookUp 返回值未检查。可视化时钟回退后 next_vis_pub_time 不复位，rate=0 会除零。全局状态和
+回调结构限制单进程只能安全承载一个 agent，异常/规划失败没有 control fail-safe，最后控制会保持。
+M1 应引入带时间戳的观测-计划-控制快照和闭环状态校正，统一线程同步/队列丢帧指标；把随机行为改为
+显式 seed、分布和更新周期参数，并提供 deterministic/heterogeneous traffic profile；测试覆盖真实/
+期望状态偏差、地图延迟/乱序/时间回退、空参考 Lane、前车查询失败、队列满、等级越界、固定 seed
+复现、多个 agent 并发和行为线程/控制线程 TSAN。
