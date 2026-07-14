@@ -118,7 +118,7 @@ BehaviorPlannerServer (MPDM)     EudmPlannerServer (EUDM)
 - [x] M0.4b5 SSC proto、配置、RViz 与构建元数据。
 - [ ] M0.4c 物理仿真器与 arena loader。
 - [x] M0.4c1 场景基础依赖与 ArenaLoader。
-- [ ] M0.4c2 PhySimulation 状态推进与临时障碍物。
+- [x] M0.4c2 PhySimulation 状态推进与临时障碍物。
 - [ ] M0.4c3 ROS2 adapter、visualizer 与仿真节点。
 - [ ] M0.4d playground、集成入口、launch 与构建配置。
 - [ ] M0.5 全仓覆盖审计和遗漏补齐。
@@ -1333,3 +1333,32 @@ Lane 只支持首条 MultiLineString；metadata length 不与几何重算，dir 
 CORE_SEMANTIC_MAP 命名。M1 应定义版本化 arena schema 和统一 Result/诊断列表，事务式解析到
 临时对象后再提交，显式支持/拒绝 GeoJSON geometry 变体，校验 CRS、拓扑、几何和车辆物理
 范围，并为缺文件、坏 JSON、空 Lane、重复 ID、多 polygon/洞、ID 0 和重复加载建立测试。
+
+## 60. M0.4c2：多车运动学推进与临时障碍物
+
+- 带路径构造先加载 VehicleSet/ObstacleSet/LaneNet，再为每辆车创建 VehicleModel，使用车辆
+  wheelbase/max steering 参数并同步初始 State；Vehicle.type 当前不参与模型选择；
+- UpdateSimulatorUsingSignalSet 要求信号数量等于车辆数量。每辆车按 ID 取控制：
+  `is_openloop=false` 时用 steer_rate/acc 调用 VehicleModel::Step(dt)，true 时直接以 signal.state
+  覆盖模型；最终状态同步回 VehicleSet；
+- AddTemporaryObstacle 以输入点为中心生成不重复闭合点的轴对齐方形，type=1，ID 从 10000
+  单调递增，同时写入总 ObstacleSet 和临时索引；RemoveTemporaryObstacle 用四顶点平均中心，
+  删除到输入点距离小于给定半径的全部临时对象；
+- LaneNet、ObstacleSet、VehicleSet 和 vehicle_ids getter 全部按值返回；ID 列表来自车辆
+  unordered_map 的遍历顺序。
+
+已确认的后续修复/验证点：默认构造 new 空路径 ArenaLoader 后立即解析，通常会在 JSON 读取
+阶段抛异常；参数构造忽略加载/模型 setup 结果。p_arena_loader_ 从不 delete，类默认复制还会
+浅拷贝裸指针。GetData/Setup/Update 及公开包装几乎固定返回 true，计时器未使用；assert 在
+Release 消失后信号数量错误仍继续执行。Setup 不先清 model map/ID vector，重复调用会保留旧
+模型并追加重复 ID。所有车辆无视配置 type 统一使用 VehicleModel，且没有 dt/有限性/控制
+限幅、车辆—车辆或车辆—障碍物碰撞、道路边界、时间戳推进和并发保护。信号数量相等不代表
+ID 集合相等，`.at(id)` 可抛异常；model find 不检查 end 就解引用。openloop 允许任意状态瞬移，
+不验证几何/动力学连续性。临时障碍边长/删除半径不检查正值和有限性，零/负尺寸产生退化或
+反向顶点；计数不回收并可能溢出。固定 ID 10000 可能与静态障碍冲突：总集合 insert 失败而
+临时集合成功，后续删除会误删同 ID 静态障碍。删除按中心半径批量操作，没有返回实际删除
+数量或指定 ID；中心计算也假设顶点非空。getter 深拷贝大型地图/车辆集合。M1 应采用 RAII、
+显式不可复制或深复制语义，统一 Status 和事务式初始化；按 Vehicle.type 工厂创建模型，严格
+校验 signal ID/dt/state/control 并加入碰撞/边界与时间推进。临时障碍应使用不冲突 ID 分配器、
+句柄式增删和几何校验，并覆盖默认构造、重复 setup、错配 ID、缺模型、零 dt、openloop 跳变、
+静态 ID 冲突、计数溢出及批量删除测试。
